@@ -1,0 +1,211 @@
+# Cabane 0.6.249, released from 3f1fccf12b0b4e48cf64e2755c08d38f8ee5067e. Both of Cabane's images below are
+# this release; `docker compose up -d` here pulls them. To upgrade, put the next
+# release's files over these and run `docker compose pull` and `docker compose up -d`.
+# Cabane: `docker compose up` from this directory, nothing to
+# prepare first. Open the app at $PUBLIC_BASE_URL (default http://localhost:8788).
+#
+# On a domain: set CABANE_DOMAIN (the app) and CABANE_PAGES_DOMAIN (rendered
+# pages) in `.env`, point both at this machine in DNS, and the `edge` service
+# below comes up and gets their certificates itself. Unset, there is no edge.
+#
+# Three containers and four named volumes: the app (Cabane's server image, the
+# one every Cabane runs, ours included), Postgres, and the built-in runner
+# (Cabane's companion image, where agents run). File bytes live on the `storage`
+# volume, the database on `db`, the secrets the app makes on its first start on
+# `secrets`, and the runner's pairing, model logins and working folders on
+# `companion_home`, so nothing is lost on restart. `.env` is optional: copy
+# .env.example to change a default.
+#
+# Three networks keep the runner away from the database: Postgres is on `data`,
+# which only the app joins; the runner is on `runner`, which only the app
+# joins with it; the app and the edge share `default`. An agent's shell can
+# reach the app and the internet, and has no route to Postgres.
+
+name: cabane
+
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    # Unset or 0: no limit. A host shared with other work sets these.
+    mem_limit: ${DB_MEMORY_LIMIT:-0}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cabane}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cabane}
+      POSTGRES_DB: ${POSTGRES_DB:-cabane}
+    volumes:
+      - db:/var/lib/postgresql/data
+    networks:
+      - data
+    healthcheck:
+      # Gate the app's start on Postgres actually accepting connections.
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-cabane} -d ${POSTGRES_DB:-cabane}']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  app:
+    image: ghcr.io/cabane-ai/cabane:0.6.249
+    restart: unless-stopped
+    mem_limit: ${APP_MEMORY_LIMIT:-0}
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # DATABASE_URL points at the sibling `db` service by name.
+      DATABASE_URL: postgres://${POSTGRES_USER:-cabane}:${POSTGRES_PASSWORD:-cabane}@db:5432/${POSTGRES_DB:-cabane}
+      # File bytes on the `storage` volume, no object storage.
+      STORAGE_BACKEND: filesystem
+      STORAGE_ROOT: /data/storage
+      # Where the app keeps the signing secret and the credential key it makes
+      # on its first start. A value set below instead wins.
+      CABANE_SECRETS_DIR: /data/secrets
+      # The browser-facing origin. Must match what you type in the address bar,
+      # scheme included: over http the session cookie isn't Secure, so signing
+      # in works on plain http://localhost. With CABANE_DOMAIN set it is
+      # https://$CABANE_DOMAIN and PUBLIC_BASE_URL is not read.
+      PUBLIC_BASE_URL: ${CABANE_DOMAIN:+https://}${CABANE_DOMAIN:-${PUBLIC_BASE_URL:-http://localhost:8788}}
+      # Where rendered pages live: their own origin, so a page can't read the
+      # session of whoever opens it. Blank on localhost, where pages share the
+      # app's origin (README: the trade for "no cloud").
+      CONTENT_BASE_URL: ${CABANE_PAGES_DOMAIN:+https://}${CABANE_PAGES_DOMAIN:-}
+      # Optional: blank, the app uses the ones it made (see .env.example).
+      VISION_URL_SIGNING_SECRET: ${VISION_URL_SIGNING_SECRET:-}
+      CABANE_SIGNING_SECRET_PREVIOUS: ${CABANE_SIGNING_SECRET_PREVIOUS:-}
+      CABANE_CREDENTIAL_KEY: ${CABANE_CREDENTIAL_KEY:-}
+      # Telemetry: off while the endpoint is empty (see .env.example and TRUST.md).
+      CABANE_TELEMETRY_ENDPOINT: ${CABANE_TELEMETRY_ENDPOINT:-}
+      CABANE_TELEMETRY_TOKEN: ${CABANE_TELEMETRY_TOKEN:-}
+      CABANE_TELEMETRY_LEVEL: ${CABANE_TELEMETRY_LEVEL:-safe}
+      CABANE_TELEMETRY_INSTALL_ID: ${CABANE_TELEMETRY_INSTALL_ID:-}
+      # Who may sign up: blank or `invite`, by invitation; `open`, anyone (README:
+      # Opening sign-up).
+      SIGNUP_MODE: ${SIGNUP_MODE:-}
+      # Email: blank, nothing is sent and links go to the app's log. With a
+      # Resend key, EMAIL_FROM is required (README: Adding email).
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      EMAIL_REPLY_TO: ${EMAIL_REPLY_TO:-}
+      # The privacy notice the sign-up screens link to. Blank: no link.
+      PRIVACY_NOTICE_URL: ${PRIVACY_NOTICE_URL:-}
+    # The app's port: published on PORT on localhost, not published at all on
+    # a domain, where the edge is the only way in. Compose can't drop a list
+    # entry by a setting, so the choice is which service in publish.yaml this
+    # one extends. It is also where one hostname without the other is refused,
+    # before anything starts: publish.yaml has no service for either half
+    # (`app-on-domain`, `app-and-pages-domain`), so compose stops with "not
+    # found". A domain without a pages hostname would serve pages on the app's
+    # origin, to people other than you. Not a `${VAR:?}` guard: Compose v2
+    # evaluates a nested `:?` even when the outer variable is unset, so it
+    # refused every start, the localhost one included.
+    extends:
+      file: publish.yaml
+      service: app${CABANE_DOMAIN:+-on-domain}${CABANE_PAGES_DOMAIN:+-and-pages-domain}
+    volumes:
+      - storage:/data/storage
+      - secrets:/data/secrets
+    networks:
+      - default
+      - data
+      - runner
+    healthcheck:
+      # Serving: migrations are done. The runner waits for this before pairing.
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:8788/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+
+  # The built-in runner: a companion, the same image anyone runs on their own
+  # machine (README: "Give your agents somewhere to run"). It pairs the ordinary
+  # way: its log prints a code, and you confirm it in the app once. Every agent
+  # placed on it shares this container and one model login. Set
+  # BUILT_IN_RUNNER=0 to leave it out; the instance doesn't need it, and agents
+  # can run on companions paired from other machines instead.
+  companion:
+    image: ghcr.io/cabane-ai/cabane-companion:0.6.249
+    scale: ${BUILT_IN_RUNNER:-1}
+    restart: unless-stopped
+    # The limit is the whole runner's, every turn in it together (README: What
+    # the built-in runner doesn't promise).
+    mem_limit: ${COMPANION_MEMORY_LIMIT:-0}
+    # The device's name in the app.
+    hostname: cabane-runner
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      # The app by its name on the `runner` network. There is no certificate
+      # there, so plain http to that one name is allowed, and to nothing else.
+      CABANE_BASE_URL: http://app:8788
+      CABANE_ALLOW_PLAIN_HTTP_HOST: app
+    volumes:
+      - companion_home:/home/node
+    networks:
+      - runner
+
+  # The way in on a domain: a stock Caddy that gets a certificate for each
+  # hostname and hands both to the app, which tells them apart by Host. It has
+  # no timeouts on a response in flight (event streams, the companion's
+  # connection) and no body limit of its own, so the app's limits are the ones
+  # that hold. Present only with CABANE_DOMAIN set (scale 1, else 0).
+  edge:
+    image: caddy:2
+    scale: 0${CABANE_DOMAIN:+1}
+    restart: unless-stopped
+    mem_limit: ${EDGE_MEMORY_LIMIT:-0}
+    depends_on:
+      - app
+    environment:
+      # Both are set whenever the edge runs: `app` refuses one without the
+      # other.
+      CABANE_DOMAIN: ${CABANE_DOMAIN:-}
+      CABANE_PAGES_DOMAIN: ${CABANE_PAGES_DOMAIN:-}
+    ports:
+      # Both must reach this machine from the internet for the certificates.
+      - '${EDGE_HTTP_PORT:-80}:80'
+      - '${EDGE_HTTPS_PORT:-443}:443'
+      - '${EDGE_HTTPS_PORT:-443}:443/udp'
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    volumes:
+      # The certificates. Lose it and they are fetched again, within the
+      # issuer's rate limits.
+      - edge_data:/data
+      - edge_config:/config
+
+configs:
+  caddyfile:
+    content: |
+      {
+        servers {
+          # A proxy on this machine or its private network may sit in front;
+          # keep the visitor's address it passes on.
+          trusted_proxies static private_ranges
+        }
+      }
+      {$$CABANE_DOMAIN}, {$$CABANE_PAGES_DOMAIN} {
+        reverse_proxy app:8788
+      }
+
+networks:
+  default:
+  # Postgres and the app. Internal: Postgres has no way out either.
+  data:
+    internal: true
+  # The app and the built-in runner.
+  runner:
+
+volumes:
+  db:
+  storage:
+  secrets:
+  companion_home:
+  edge_data:
+  edge_config:

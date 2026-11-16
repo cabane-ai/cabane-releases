@@ -1,0 +1,68 @@
+# Cabane 0.6.249, released from 3f1fccf12b0b4e48cf64e2755c08d38f8ee5067e.
+# Each agent turn in a container of its own, over compose.yaml:
+#
+#   docker compose -f compose.yaml -f compose.turns.yaml up -d
+#
+# The built-in runner starts a container for every turn and removes it when the
+# turn ends, so two agents can't read each other's files or reach each other,
+# and a turn can't reach this machine, Postgres or a private network. To do
+# that it needs Docker's socket, which is control of this machine; the turns'
+# containers never get it. Each turn's network leads only to the way out, a
+# stock Squid (./way-out.conf). README: "Each turn in a container of its own".
+#
+# Without this file nothing in the instance changes.
+
+services:
+  companion:
+    # The socket's group, so the runner (not root) can use it:
+    # `stat -c %g /var/run/docker.sock`.
+    group_add:
+      - '${DOCKER_GID:?set DOCKER_GID to the group of /var/run/docker.sock (stat -c %g /var/run/docker.sock)}'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      # The executor and its settings (the companion's README: runner.executor).
+      # A turn's container runs this same image: built by compose under this name
+      # here, and the release's companion image in a release's files.
+      CABANE_RUNNER: >-
+        {"executor":"docker","docker":{
+        "image":"ghcr.io/cabane-ai/cabane-companion:0.6.249",
+        "wayOut":"${COMPOSE_PROJECT_NAME:-cabane}-way-out-1",
+        "network":"${TURN_NETWORK:-closed}",
+        "memoryMb":"${TURN_MEMORY_MB:-4096}",
+        "cpus":"${TURN_CPUS:-2}",
+        "pids":"${TURN_PIDS:-512}",
+        "turnsAtOnce":"${TURNS_AT_ONCE:-4}",
+        "cgroupParent":"${TURN_CGROUP_PARENT:-}"}}
+    depends_on:
+      way-out:
+        condition: service_started
+
+  way-out:
+    image: ubuntu/squid:latest
+    restart: unless-stopped
+    mem_limit: ${WAY_OUT_MEMORY_LIMIT:-0}
+    configs:
+      - source: way_out
+        target: /etc/squid/squid.conf
+      # So the directory the companion writes its rules into is there when
+      # Squid first reads its configuration.
+      - source: way_out_rules
+        target: /etc/squid/cabane/until-the-companion-starts.conf
+    volumes:
+      - way_out_log:/var/log/squid
+      - way_out_spool:/var/spool/squid
+    # Beside the app, which turns reach through it by its name, and the internet.
+    networks:
+      - runner
+
+configs:
+  way_out:
+    file: ./way-out.conf
+  way_out_rules:
+    content: |
+      # The companion writes cabane.conf beside this when it starts.
+
+volumes:
+  way_out_log:
+  way_out_spool:

@@ -1,0 +1,13 @@
+# The app's port, chosen by compose.yaml's `app` (extends): `app` without a
+# domain, `app-on-domain-and-pages-domain` with CABANE_DOMAIN and
+# CABANE_PAGES_DOMAIN set. Not a service of its own. There is deliberately no
+# service for one hostname alone: its absence is the refusal.
+services:
+  app:
+    ports:
+      # host:container — change the host side to publish on a different port.
+      - '${PORT:-8788}:8788'
+  app-on-domain-and-pages-domain:
+    # Reached only through the edge, on the compose network.
+    expose:
+      - '8788'
