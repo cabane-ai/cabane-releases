@@ -1,6 +1,6 @@
-# Run Cabane on your own box
+# Run Cabane on your own machine
 
-**One `docker compose up` and you have a working Cabane** — files, chat, agents — on your own machine, with no cloud account and nothing phoning home. The only traffic that ever leaves the box is your agent's own LLM calls.
+**One `docker compose up` and you have a working Cabane** — files, chat, agents — on your own machine, with no cloud account and nothing phoning home. The only traffic that ever leaves the machine is your agent's own LLM calls.
 
 It's the same server image that runs cabane.ai, running as a single process next to a Postgres 17 container, with a third container where your agents run. Each release publishes both images, for x86 and Arm, and a compose file that names them at that release's version. Everything is local: your files live on a disk volume (no object storage), the database lives on a disk volume, and you sign in with an account you create on first run.
 
@@ -17,7 +17,7 @@ You do **not** need: an R2/S3 bucket, an email provider, a public URL, a TLS cer
 
 ---
 
-## The walk — fresh machine to a working agent conversation
+## Quick start
 
 ### 1. Get a release
 
@@ -91,7 +91,7 @@ The pairing, the sign-in and the agents' working folders are kept on the `cabane
 
 All turns run in the one container, so two things a companion on its own machine can do, it can't do here:
 
-- **A turn's leftovers aren't cleaned up.** When a turn ends or is stopped, a process it started in the background (a dev server, a watcher) can keep running. Restarting the runner clears them: `docker compose restart companion`.
+- **Background processes outlive a turn.** When a turn ends or is stopped, a process it started in the background (a dev server, a watcher) can keep running. Restarting the runner clears them: `docker compose restart companion`.
 - **A turn killed for memory isn't reported as out of memory.** With `COMPANION_MEMORY_LIMIT` set, the limit is the whole runner's, every turn in it together. When it's reached, the system stops the biggest process in the runner, usually the command that went over: the agent sees that command killed, not an out-of-memory report, and the companion and other turns carry on. If the biggest process is the companion itself, every turn running then stops with it, and the container starts again on its own.
 
 #### Leaving the built-in runner out
@@ -107,7 +107,7 @@ docker run -d --name cabane-companion --restart unless-stopped \
   --hostname my-runner \
   -e CABANE_BASE_URL=https://cabane.example.com \
   -v cabane-companion-home:/home/node \
-  ghcr.io/cabane-ai/cabane-companion:0.6.240               # the instance's version
+  ghcr.io/cabane-ai/cabane-companion:0.6.252               # the instance's version
 docker logs cabane-companion                               # the pairing code
 docker exec -it cabane-companion claude auth login         # or: codex login --device-auth
 docker exec cabane-companion cabane status
@@ -204,13 +204,13 @@ People sign in as before and find their files, and the built-in runner answers w
 
 ## Going further
 
-This setup is deliberately single-player and single-box. A few things are out of scope on purpose:
+This setup is deliberately single-player and single-machine. A few things are out of scope on purpose:
 
-- **An external Claude Code or Cursor over MCP.** You can connect an outside assistant straight to your workspace: in workspace settings → connect an external client, mint a personal access token, and add your box as an MCP server (`http://localhost:8788/api/mcp`, bearer = that token). It reads and writes your files _as you_ — genuinely useful, and it works here exactly as on cabane.ai. It is **not** a companion, so it doesn't give your workspace's own agents anywhere to run; that's what the runner in step 5 is for.
+- **An external Claude Code or Cursor over MCP.** You can connect an outside assistant straight to your workspace: in workspace settings → connect an external client, mint a personal access token, and add your instance as an MCP server (`http://localhost:8788/api/mcp`, bearer = that token). It reads and writes your files _as you_ — genuinely useful, and it works here exactly as on cabane.ai. It is **not** a companion, so it doesn't give your workspace's own agents anywhere to run; that's what the runner in step 5 is for.
 - **A public URL / other people / your phone.** See [On a domain](#on-a-domain) below.
 - **Email, invites, multiplayer.** Single-player needs none of it; password reset works via a link printed in the app logs. For more people, see [Sign-up and email](#sign-up-and-email) and [On a domain](#on-a-domain).
 
-See [TRUST.md](./TRUST.md) for what running Cabane yourself promises: never-brick, no phone-home unless you turn it on, export-everything.
+See [TRUST.md](./TRUST.md) for what running Cabane yourself promises: it keeps working without us, it sends no telemetry unless you turn it on, and you can export everything.
 
 ---
 
@@ -219,10 +219,11 @@ See [TRUST.md](./TRUST.md) for what running Cabane yourself promises: never-bric
 By default the built-in runner is one container that every agent shares. With `compose.turns.yaml` laid over `compose.yaml`, it starts a container for each turn instead and removes it when the turn ends, is stopped or fails:
 
 - two agents can't read each other's files or reach each other;
-- a turn can't reach this machine, Postgres, the runner or a private network. Its only way out is a stock Squid, the `way-out` service ([way-out.conf](way-out.conf)), which allows web ports and the instance, and refuses private, loopback, link-local and reserved addresses and this machine's own;
+- a turn can't reach this machine, Postgres, the runner or a private network. Its only route out is the `egress` service, a Squid proxy run from the runner's own image ([egress.conf](egress.conf)), which allows web ports and the instance, and refuses private, loopback, link-local and reserved addresses and this machine's own;
+- a turn never holds the model credentials or the GitHub token in the runner's `secrets.json`, only stand-ins for them (below);
 - nothing a turn started outlives it, and a turn killed for memory is reported as out of memory.
 
-Each conversation and agent keeps a volume, `cabane-place-<conversation>-<agent>`, with the agent's working folder and the harness's sessions, so the next turn picks up where the last left off. These volumes are kept until you remove them.
+Each conversation and agent keeps a home volume, `cabane-home-<conversation>-<agent>`, with the agent's working folder and the harness's sessions, so the next turn picks up where the last left off. These volumes are kept until you remove them.
 
 **Turn it on.** The runner needs Docker's socket, which is control of this machine. The turns' containers never get it.
 
@@ -233,33 +234,42 @@ docker compose -f compose.yaml -f compose.turns.yaml up -d
 
 Put both files on every `docker compose` command from then on, or set `COMPOSE_FILE=compose.yaml:compose.turns.yaml` in `.env`. Without the second file nothing changes.
 
-**Sign in.** A sign-in made with `claude auth login` inside the runner stays in the runner and doesn't reach a turn's container. Put the harness's key in the runner's `~/.cabane/secrets.json` instead, and every turn gets its own harness's key: `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `ANTHROPIC_API_KEY` for Claude Code, `CODEX_API_KEY` for Codex.
+**Sign in.** A sign-in made with `claude auth login` inside the runner stays in the runner and doesn't reach a turn's container. Put the harness's key in the runner's `~/.cabane/secrets.json` instead, and every turn can use its own harness's key: `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `ANTHROPIC_API_KEY` for Claude Code, `CODEX_API_KEY` for Codex. `GH_TOKEN` there is for git and `gh`.
 
 ```bash
 echo '{"CLAUDE_CODE_OAUTH_TOKEN": "…"}' |
   docker compose exec -T companion sh -c 'umask 077; cat > ~/.cabane/secrets.json'
 ```
 
+**What a turn holds.** Those four credentials never enter a turn's container. The turn gets a stand-in for each, the same one every time for that conversation and agent, so a repository it cloned keeps working. The egress proxy replaces the stand-in with the real credential only on a request from that turn's container to that credential's own service (`api.anthropic.com`, `api.openai.com`, `github.com`, `api.github.com`), sent over TLS. A stand-in is worth nothing anywhere else, from any other container, or once its turn is over.
+
+- **The egress proxy intercepts TLS for those four hosts.** To replace a stand-in it has to read the request, so it terminates TLS for those four hosts and no others, and still checks each host's real certificate. It signs those connections with a certificate authority (CA) it generates each time it starts and keeps in memory, and the turn's container trusts that CA. Connections to every other host are tunnelled untouched, with the host's own certificate.
+- **Refused on those hosts:** plain HTTP, and the requests that create or reveal a credential, such as adding an SSH key to GitHub.
+- **Passed to the turn unchanged:** anything else in `secrets.json`, and the workspace's room secrets and connections.
+- **Not covered:** a Codex pointed at another address in its `config.toml` (an injected credential won't work there), Codex on a ChatGPT sign-in, GitHub Enterprise, and a response that echoes a credential back.
+- **If the egress proxy stops or restarts** while a turn runs, the turn fails within 30 seconds, saying so, and isn't run again. Restarting it during work does this to every turn running.
+- **A credential with any character but letters, digits and `. _ + / = -`** refuses every turn, naming it but not showing its value.
+
 **Settings**, in `.env`:
 
-| Variable             | Default  |                                                                                                                                                                                                          |
-| -------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `TURN_MEMORY_MB`     | `4096`   | Each turn's memory, with no swap beyond it. A command that outgrows it fails with its own error, such as Node's "heap out of memory", and isn't reported as out of memory: this is the setting to raise. |
-| `TURN_CPUS`          | `2`      | Each turn's processors.                                                                                                                                                                                  |
-| `TURN_PIDS`          | `512`    | Each turn's processes.                                                                                                                                                                                   |
-| `TURNS_AT_ONCE`      | `4`      | Turns running together; the rest wait. A turn still waiting after 30 minutes fails, and the person is told.                                                                                              |
-| `TURN_CGROUP_PARENT` | unset    | A control group (or systemd slice) of yours that every turn's container is started under, so your own limit on it caps them all. The runner doesn't create it or set its limit.                          |
-| `TURN_NETWORK`       | `closed` | `open` gives each turn an ordinary bridge with a direct route out as well as the way out.                                                                                                                |
+| Variable               | Default  |                                                                                                                                                                                                          |
+| ---------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TURN_MEMORY_MB`       | `4096`   | Each turn's memory, with no swap beyond it. A command that outgrows it fails with its own error, such as Node's "heap out of memory", and isn't reported as out of memory: this is the setting to raise. |
+| `TURN_CPUS`            | `2`      | Each turn's processors.                                                                                                                                                                                  |
+| `TURN_PIDS`            | `512`    | Each turn's processes.                                                                                                                                                                                   |
+| `MAX_CONCURRENT_TURNS` | `4`      | Turns running at the same time; the rest wait. A turn still waiting after 30 minutes fails, and the person is told.                                                                                      |
+| `TURN_CGROUP_PARENT`   | unset    | A control group (or systemd slice) of yours that every turn's container is started under, so your own limit on it caps them all. The runner doesn't create it or set its limit.                          |
+| `TURN_NETWORK`         | `closed` | `open` gives each turn an ordinary bridge with a direct route out as well as the egress proxy.                                                                                                           |
 
-Turns together can take `TURN_MEMORY_MB` times `TURNS_AT_ONCE`, 16 GB with the defaults. Nothing caps that total but `TURN_CGROUP_PARENT`.
+Turns together can take `TURN_MEMORY_MB` times `MAX_CONCURRENT_TURNS`, 16 GB with the defaults. Nothing caps that total but `TURN_CGROUP_PARENT`.
 
 **Not yet:**
 
 - OpenCode. A turn for OpenCode ends saying it isn't available in a container.
-- The harnesses' own sandboxes. Neither Claude Code's nor Codex's starts under Docker's default settings, so the turn's container is the wall.
+- The harnesses' own sandboxes. Neither Claude Code's nor Codex's starts under Docker's default settings, so the turn's container is the only isolation.
 - Docker Desktop on a Mac hasn't been tried.
 
-**On another machine.** `compose.companion.yaml` brings up a companion and its way out alone, with each turn in a container, paired to an instance elsewhere:
+**On another machine.** `compose.companion.yaml` brings up a companion and its egress proxy alone, with each turn in a container, paired to an instance elsewhere:
 
 ```bash
 export DOCKER_GID=$(stat -c %g /var/run/docker.sock)

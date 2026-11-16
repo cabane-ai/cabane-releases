@@ -1,4 +1,4 @@
-# Cabane 0.6.249, released from 3f1fccf12b0b4e48cf64e2755c08d38f8ee5067e. Both of Cabane's images below are
+# Cabane 0.6.252, released from 8a401f6b0e4487946202fc905dcfb9e15a1c7d3b. Both of Cabane's images below are
 # this release; `docker compose up -d` here pulls them. To upgrade, put the next
 # release's files over these and run `docker compose pull` and `docker compose up -d`.
 # Cabane: `docker compose up` from this directory, nothing to
@@ -45,7 +45,7 @@ services:
       retries: 20
 
   app:
-    image: ghcr.io/cabane-ai/cabane:0.6.249
+    image: ghcr.io/cabane-ai/cabane:0.6.252
     restart: unless-stopped
     mem_limit: ${APP_MEMORY_LIMIT:-0}
     depends_on:
@@ -88,8 +88,8 @@ services:
       EMAIL_REPLY_TO: ${EMAIL_REPLY_TO:-}
       # The privacy notice the sign-up screens link to. Blank: no link.
       PRIVACY_NOTICE_URL: ${PRIVACY_NOTICE_URL:-}
-    # The app's port: published on PORT on localhost, not published at all on
-    # a domain, where the edge is the only way in. Compose can't drop a list
+    # The app's port: published on PORT on localhost, and not published at all
+    # on a domain, where the edge is the only entry point. Compose can't drop a list
     # entry by a setting, so the choice is which service in publish.yaml this
     # one extends. It is also where one hostname without the other is refused,
     # before anything starts: publish.yaml has no service for either half
@@ -128,7 +128,7 @@ services:
   # BUILT_IN_RUNNER=0 to leave it out; the instance doesn't need it, and agents
   # can run on companions paired from other machines instead.
   companion:
-    image: ghcr.io/cabane-ai/cabane-companion:0.6.249
+    image: ghcr.io/cabane-ai/cabane-companion:0.6.252
     scale: ${BUILT_IN_RUNNER:-1}
     restart: unless-stopped
     # The limit is the whole runner's, every turn in it together (README: What
@@ -149,7 +149,7 @@ services:
     networks:
       - runner
 
-  # The way in on a domain: a stock Caddy that gets a certificate for each
+  # The edge, on a domain: a stock Caddy that gets a certificate for each
   # hostname and hands both to the app, which tells them apart by Host. It has
   # no timeouts on a response in flight (event streams, the companion's
   # connection) and no body limit of its own, so the app's limits are the ones
@@ -196,7 +196,7 @@ configs:
 
 networks:
   default:
-  # Postgres and the app. Internal: Postgres has no way out either.
+  # Postgres and the app. Internal: Postgres has no route out either.
   data:
     internal: true
   # The app and the built-in runner.

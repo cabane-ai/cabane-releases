@@ -2,7 +2,7 @@
 
 _A stub — the seed of a fuller trust page. Three promises an instance is built to keep._
 
-**Never-brick.** Cabane on your box does not depend on Cabane the company to keep working. There's no license check, no activation server, no remote kill switch, and no expiry. If we disappeared tomorrow, the copy on your machine keeps running exactly as it does today — it's your code, your database, your files, on your disk.
+**It keeps working without us.** Cabane on your machine does not depend on Cabane the company to keep working. There's no license check, no activation server, no remote kill switch, and no expiry. If we disappeared tomorrow, the copy on your machine keeps running exactly as it does today — it's your code, your database, your files, on your disk.
 
 **No phone-home unless you turn it on.** Out of the box the app makes no outbound calls of its own: no telemetry, no analytics, no license or update pings. If you set a telemetry destination, the app sends operational data there and nowhere else. It never sends the content of your files or conversations. The full list of what is sent is below.
 
@@ -10,9 +10,9 @@ _A stub — the seed of a fuller trust page. Three promises an instance is built
 
 ## Telemetry, if you turn it on
 
-Nothing below is sent unless `CABANE_TELEMETRY_ENDPOINT` is set. With it unset the app starts no exporter and opens no connection for telemetry. The _only_ other traffic that leaves your box is your own agent's calls to whatever model provider you pointed it at.
+Nothing below is sent unless `CABANE_TELEMETRY_ENDPOINT` is set. With it unset the app starts no exporter and opens no connection for telemetry. The _only_ other traffic that ever leaves the machine is your own agent's calls to whatever model provider you pointed it at.
 
-Set it, and the app sends to that one address, over OpenTelemetry's protocol (OTLP over HTTP, JSON). Any OpenTelemetry collector, or a backend that accepts OTLP, can receive it. `CABANE_TELEMETRY_TOKEN`, if set, is sent as `Authorization: Bearer <token>`. Unset the endpoint and restart, and the box is silent again.
+Set it, and the app sends to that one address, over OpenTelemetry's protocol (OTLP over HTTP, JSON). Any OpenTelemetry collector, or a backend that accepts OTLP, can receive it. `CABANE_TELEMETRY_TOKEN`, if set, is sent as `Authorization: Bearer <token>`. Unset the endpoint and restart, and the machine is silent again.
 
 You choose one of two levels with `CABANE_TELEMETRY_LEVEL`:
 
