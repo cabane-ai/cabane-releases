@@ -107,7 +107,7 @@ docker run -d --name cabane-companion --restart unless-stopped \
   --hostname my-runner \
   -e CABANE_BASE_URL=https://cabane.example.com \
   -v cabane-companion-home:/home/node \
-  ghcr.io/cabane-ai/cabane-companion:0.6.263               # the instance's version
+  ghcr.io/cabane-ai/cabane-companion:0.6.265               # the instance's version
 docker logs cabane-companion                               # the pairing code
 docker exec -it cabane-companion claude auth login         # or: codex login --device-auth
 docker exec cabane-companion cabane status
@@ -272,7 +272,7 @@ Deleting a home loses what the agent left in it: the working folder, with anythi
 **Turn it on.** The runner needs Docker's socket, which is control of this machine. The turns' containers never get it.
 
 ```bash
-export DOCKER_GID=$(stat -c %g /var/run/docker.sock)
+export DOCKER_GID=$(stat -c %g /var/run/docker.sock)   # Docker's own socket; a Docker without root: below
 docker compose -f compose.yaml -f compose.turns.yaml up -d
 ```
 
@@ -312,12 +312,13 @@ echo '{"CLAUDE_CODE_OAUTH_TOKEN": "…"}' |
 | `TURN_PORTS`              | unset       | A range of ports on this machine, such as `20000-20029`, that a person can open an agent's app on, with `compose.ports.yaml` ([below](#ports-a-person-can-open)). Unset: nothing outside reaches a turn. |
 | `TURN_PORTS_HOST`         | `localhost` | The name or address people reach this machine by, which an agent gives them with its ports.                                                                                                              |
 | `TURN_PORTS_IDLE_MINUTES` | `30`        | How long an app kept after its turn stays up with nothing connected to it.                                                                                                                               |
+| `DOCKER_SOCKET`           | unset       | Docker's socket on this machine, which the runner is given. Unset: `/var/run/docker.sock`. Set it for a Docker without root (below), with `DOCKER_GID` read as it says there.                            |
 
 Turns together can take `TURN_MEMORY_MB` times `MAX_CONCURRENT_TURNS`, 16 GB with the defaults. Nothing caps that total but `TURN_CGROUP_PARENT`.
 
 ### Ports a person can open
 
-An agent that builds an app can show it running. With `TURN_PORTS` set to a range of ports and `compose.ports.yaml` laid over the others, each conversation and agent gets three ports from the range, the same ones in every turn, and a turn is told them, with the address to give a person, in `CABANE_PORTS` (such as `20000,20001,20002`) and `CABANE_PORTS_HOST`. An app the agent serves on one of them, listening on all of the container's addresses (`0.0.0.0`, not `localhost`), opens at `http://<TURN_PORTS_HOST>:<port>`, WebSockets included.
+An agent that builds an app can show it running. With `TURN_PORTS` set to a range of ports and `compose.ports.yaml` laid over the others, each conversation and agent holds three ports from the range while one of its turns is up, and a turn is told them, with the address to give a person, in `CABANE_PORTS` (such as `20000,20001,20002`) and `CABANE_PORTS_HOST`. An app the agent serves on one of them, listening on all of the container's addresses (`0.0.0.0`, not `localhost`), opens at `http://<TURN_PORTS_HOST>:<port>`, WebSockets included.
 
 ```bash
 echo 'TURN_PORTS=20000-20029' >> .env
@@ -328,7 +329,9 @@ docker compose -f compose.yaml -f compose.turns.yaml -f compose.ports.yaml up -d
 - **Anyone who can reach this machine on those ports can open the app.** Cabane doesn't check who. For https, names or a sign-in, put a proxy of your own in front, or publish the range on a private address only by editing `compose.ports.yaml`.
 - **The way in is the egress proxy's.** It publishes the range, and a relay beside Squid passes each connection to the one turn container that owns the port, on the same port. It connects nowhere else, and a connection from a turn's own network is refused, so one turn can't reach another's app through it. Nothing a turn could reach before is reachable now.
 - **An app still serving when its turn ends is kept**, with its container, until nothing has connected to its ports for `TURN_PORTS_IDLE_MINUTES`, the next turn in that conversation starts, someone stops the turn, the egress proxy restarts, or the runner restarts. It keeps its files and its route out, but none of the turn's credentials: no stand-in in it works any more. It doesn't count against `MAX_CONCURRENT_TURNS`, and does count against memory. A container with nothing listening on its ports is removed when its turn ends, as before.
-- **A range serves a third as many conversations and agents as it has ports**, rounded down: `20000-20029` serves ten. A conversation and agent keep their three for as long as their home volume exists, so a link handed out never leads to another conversation's app. Once every three belong to a home that still exists, a turn in a conversation new to the runner gets no ports, and the runner's log says so: widen the range, or remove homes you no longer need (`docker volume rm`), whose ports are then given again. A home deleted for disk gives its ports back.
+- **A range serves a third as many conversations and agents up at once as it has ports**, rounded down, however many there are over time: `20000-20029` serves ten at a time. A conversation and agent hold their three while they have a container: a turn running or waiting to start, an app kept after its turn, or a container Docker failed to remove, which the runner tries again each minute and which nothing leads to meanwhile. Their next turn gets the same three when no other conversation has taken them since. When none are free, the ones given are those of the conversation that has been without a container longest.
+- **So a link handed out can, in time, open another conversation's app.** Until its ports are given again, it gets no answer.
+- **When every three are held, a turn still runs, without ports.** It has `CABANE_PORTS_FULL=1` and `CABANE_PORTS_HOST` in place of `CABANE_PORTS`, and the runner's log says so. Widen the range to cover the turns you have up at once.
 - **The range can't include 3128 or 1344**, which the egress proxy listens on itself: the runner refuses the setting, and the egress proxy refuses to start with it.
 
 Without `TURN_PORTS`, turns' containers and networks are exactly as above. With it set but without `compose.ports.yaml`, turns fail, and the runner's log says the egress proxy doesn't publish the ports.
@@ -342,12 +345,33 @@ Without `TURN_PORTS`, turns' containers and networks are exactly as above. With 
 **On another machine.** `compose.companion.yaml` brings up a companion and its egress proxy alone, with each turn in a container, paired to an instance elsewhere:
 
 ```bash
-export DOCKER_GID=$(stat -c %g /var/run/docker.sock)
+export DOCKER_GID=$(stat -c %g /var/run/docker.sock)   # Docker's own socket; a Docker without root: below
 CABANE_BASE_URL=https://cabane.example.com docker compose -f compose.companion.yaml up -d
 docker compose -f compose.companion.yaml logs companion       # the pairing code
 ```
 
 Pair it, sign it in as above and place agents on it as in step 5. It shows up as `cabane-companion`, or `COMPANION_NAME`. The settings above apply to it too, ports with `-f compose.companion.yaml -f compose.ports.yaml`.
+
+**On a Docker without root.** A Docker run without root ([Docker's guide](https://docs.docker.com/engine/security/rootless/)) works with either file, given two settings. Its socket isn't at `/var/run/docker.sock`: put its place in `DOCKER_SOCKET`, usually `$XDG_RUNTIME_DIR/docker.sock`. Read `DOCKER_GID` from inside a container given that socket, which is the group the runner meets there; a `stat` of the socket on this machine gives an id the runner is refused with. With `docker` talking to that Docker:
+
+```bash
+export DOCKER_SOCKET=$XDG_RUNTIME_DIR/docker.sock
+export DOCKER_GID=$(docker run --rm -v "$DOCKER_SOCKET:/var/run/docker.sock" --entrypoint stat \
+  ghcr.io/cabane-ai/cabane-companion:0.6.265 -c %g /var/run/docker.sock)
+```
+
+Then bring it up with those two set, without the `stat` line above, which would replace the group with a wrong one, or with nothing where `/var/run/docker.sock` doesn't exist. The instance on this machine with a container per turn:
+
+```bash
+docker compose -f compose.yaml -f compose.turns.yaml up -d
+```
+
+Or a companion alone, paired to an instance elsewhere:
+
+```bash
+CABANE_BASE_URL=https://cabane.example.com docker compose -f compose.companion.yaml up -d
+docker compose -f compose.companion.yaml logs companion       # the pairing code
+```
 
 ## Adding tools for agents
 

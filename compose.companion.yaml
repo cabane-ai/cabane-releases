@@ -1,4 +1,4 @@
-# Cabane 0.6.263, released from 09e4c8cfc64cc16ab08f4d08172a0856b7ccff36. Cabane's images below are this
+# Cabane 0.6.265, released from b992e897c6d7877ec90a363660f1b9a217af6b46. Cabane's images below are this
 # release; `docker compose up -d` here pulls them. To upgrade, put the next
 # release's files over these and run `docker compose pull` and `docker compose up -d`.
 # RUNNER_IMAGE in .env names an image of your own, built on this release's
@@ -12,26 +12,27 @@
 #   CABANE_BASE_URL=https://cabane.example.com DOCKER_GID=$(stat -c %g /var/run/docker.sock) \
 #     docker compose -f compose.companion.yaml up -d
 #
-# README: "Each turn in a container of its own".
+# A Docker without root keeps its socket elsewhere: DOCKER_SOCKET, and DOCKER_GID
+# read as the README says. README: "Each turn in a container of its own".
 
 name: cabane-companion
 
 services:
   companion:
-    image: ${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.263}
+    image: ${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.265}
     restart: unless-stopped
     mem_limit: ${COMPANION_MEMORY_LIMIT:-0}
     # The device's name in the app.
     hostname: ${COMPANION_NAME:-cabane-companion}
     group_add:
-      - '${DOCKER_GID:?set DOCKER_GID to the group of /var/run/docker.sock (stat -c %g /var/run/docker.sock)}'
+      - '${DOCKER_GID:?set DOCKER_GID to the group of the Docker socket: stat -c %g /var/run/docker.sock, or with DOCKER_SOCKET set the line in the README (Each turn in a container of its own)}'
     environment:
       CABANE_BASE_URL: ${CABANE_BASE_URL:?set CABANE_BASE_URL to the instance's https address}
       # Plain http to one host on a private network only, as for the built-in runner.
       CABANE_ALLOW_PLAIN_HTTP_HOST: ${CABANE_ALLOW_PLAIN_HTTP_HOST:-}
       CABANE_RUNNER: >-
         {"executor":"docker","docker":{
-        "image":"${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.263}",
+        "image":"${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.265}",
         "egress":"${COMPOSE_PROJECT_NAME:-cabane-companion}-egress-1",
         "network":"${TURN_NETWORK:-closed}",
         "memoryMb":"${TURN_MEMORY_MB:-4096}",
@@ -46,7 +47,8 @@ services:
         "cgroupParent":"${TURN_CGROUP_PARENT:-}"}}
     volumes:
       - companion_home:/home/node
-      - /var/run/docker.sock:/var/run/docker.sock
+      # DOCKER_SOCKET: the socket's place on this machine, for a Docker without root.
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
     depends_on:
       egress:
         condition: service_started
@@ -54,7 +56,7 @@ services:
   egress:
     # The companion's own image, which carries the OpenSSL build of Squid and
     # the lookup helper the egress proxy asks (./egress.sh, ./egress.conf).
-    image: ${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.263}
+    image: ${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.265}
     restart: unless-stopped
     mem_limit: ${EGRESS_MEMORY_LIMIT:-0}
     user: proxy
