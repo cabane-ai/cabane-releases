@@ -1,6 +1,8 @@
-# Cabane 0.6.252, released from 8a401f6b0e4487946202fc905dcfb9e15a1c7d3b. Both of Cabane's images below are
-# this release; `docker compose up -d` here pulls them. To upgrade, put the next
+# Cabane 0.6.263, released from 09e4c8cfc64cc16ab08f4d08172a0856b7ccff36. Cabane's images below are this
+# release; `docker compose up -d` here pulls them. To upgrade, put the next
 # release's files over these and run `docker compose pull` and `docker compose up -d`.
+# RUNNER_IMAGE in .env names an image of your own, built on this release's
+# runner image, in its place (README: Adding tools for agents).
 # Each agent turn in a container of its own, over compose.yaml:
 #
 #   docker compose -f compose.yaml -f compose.turns.yaml up -d
@@ -10,8 +12,9 @@
 # and a turn can't reach this machine, Postgres or a private network. To do
 # that it needs Docker's socket, which is control of this machine; the turns'
 # containers never get it. Each turn's network leads only to the egress proxy,
-# a Squid run from the companion's image (./egress.conf), which also keeps the
-# model credentials and GitHub token in secrets.json out of every turn. README:
+# a Squid run from the companion's image (./egress.conf), which also keeps
+# secrets with addresses, connections' keys, and the model credentials and
+# GitHub token in secrets.json out of every turn. README:
 # "Each turn in a container of its own".
 #
 # Without this file nothing in the instance changes.
@@ -27,41 +30,50 @@ services:
     environment:
       # The executor and its settings (the companion's README: runner.executor).
       # A turn's container runs this same image: built by compose under this name
-      # here, and the release's companion image in a release's files.
+      # here, and in a release's files RUNNER_IMAGE, or the release's companion
+      # image when that is unset.
       CABANE_RUNNER: >-
         {"executor":"docker","docker":{
-        "image":"ghcr.io/cabane-ai/cabane-companion:0.6.252",
+        "image":"${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.263}",
         "egress":"${COMPOSE_PROJECT_NAME:-cabane}-egress-1",
         "network":"${TURN_NETWORK:-closed}",
         "memoryMb":"${TURN_MEMORY_MB:-4096}",
         "cpus":"${TURN_CPUS:-2}",
         "pids":"${TURN_PIDS:-512}",
         "maxConcurrentTurns":"${MAX_CONCURRENT_TURNS:-4}",
+        "minFreeDiskGb":"${MIN_FREE_DISK_GB:-}",
+        "homeIdleHours":"${HOME_IDLE_HOURS:-24}",
+        "ports":"${TURN_PORTS:-}",
+        "portsHost":"${TURN_PORTS_HOST:-}",
+        "portsIdleMinutes":"${TURN_PORTS_IDLE_MINUTES:-30}",
         "cgroupParent":"${TURN_CGROUP_PARENT:-}"}}
     depends_on:
       egress:
         condition: service_started
 
   egress:
-    # The companion's own image, which carries the OpenSSL build of Squid and
-    # the lookup helper the egress proxy asks (./egress.sh, ./egress.conf).
-    image: ghcr.io/cabane-ai/cabane-companion:0.6.252
+    # The companion's own image, which carries the OpenSSL build of Squid, the
+    # route helper it asks and the swap service it calls (./egress.sh,
+    # ./egress.conf). Always the same image as the companion, which writes the
+    # table the swap service reads.
+    image: ${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.263}
     restart: unless-stopped
     mem_limit: ${EGRESS_MEMORY_LIMIT:-0}
     user: proxy
     entrypoint: ['/usr/bin/tini', '--', '/usr/local/lib/cabane/egress.sh']
     command: []
     # What the egress proxy keeps only in memory, in a tmpfs: its CA, the
-    # certificates it makes, and the credential table. Never on a volume.
+    # certificates it makes, and the table of stand-ins and values. Never on a
+    # volume.
     tmpfs:
       - /run/cabane-egress:mode=0700,uid=13,gid=13,size=64m
     configs:
       - source: egress
         target: /etc/squid/squid.conf
       # So the directory the companion writes its rules into is there when
-      # Squid first reads its configuration.
+      # Squid first reads its configuration, holding this instance's own rule.
       - source: egress_rules
-        target: /etc/squid/cabane/00-empty.conf
+        target: /etc/squid/cabane/00-instance.conf
     volumes:
       - egress_log:/var/log/squid
       - egress_spool:/var/spool/squid
@@ -75,6 +87,12 @@ configs:
   egress_rules:
     content: |
       # The companion writes cabane.conf beside this when it starts.
+      # The app's pages-only name (compose.yaml, RUNNER_PAGES_BASE_URL), so a
+      # turn's browser loads the pages it is handed. Allowed by name and port,
+      # ahead of the refused addresses, as the companion allows the app itself.
+      acl cabane_runner_pages dstdomain cabane-pages
+      acl cabane_runner_pages_port port 8788
+      http_access allow cabane_runner_pages cabane_runner_pages_port
 
 volumes:
   egress_log:

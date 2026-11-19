@@ -107,7 +107,7 @@ docker run -d --name cabane-companion --restart unless-stopped \
   --hostname my-runner \
   -e CABANE_BASE_URL=https://cabane.example.com \
   -v cabane-companion-home:/home/node \
-  ghcr.io/cabane-ai/cabane-companion:0.6.252               # the instance's version
+  ghcr.io/cabane-ai/cabane-companion:0.6.263               # the instance's version
 docker logs cabane-companion                               # the pairing code
 docker exec -it cabane-companion claude auth login         # or: codex login --device-auth
 docker exec cabane-companion cabane status
@@ -142,7 +142,7 @@ echo 'SIGNUP_MODE=open' >> .env
 docker compose up -d
 ```
 
-To close it again, remove the line (or set `SIGNUP_MODE=invite`) and `docker compose up -d`. Accounts already made stay. To link the sign-up screens to a privacy notice of yours, set `PRIVACY_NOTICE_URL` to its address the same way.
+To close it again, remove the line (or set `SIGNUP_MODE=invite`) and `docker compose up -d`. Accounts already made stay. To link the sign-up screens to a privacy notice or terms of use of yours, set `PRIVACY_NOTICE_URL` or `TERMS_URL` to its address the same way.
 
 ### Adding email
 
@@ -173,11 +173,13 @@ docker compose pull
 docker compose up -d
 ```
 
+With `RUNNER_IMAGE` set in `.env`, build your image again on the new release's before `docker compose up -d`, and leave out `docker compose pull`: [Adding tools for agents](#adding-tools-for-agents).
+
 The download replaces the compose file and the scripts and leaves your `.env` alone. Your data, the runner's pairing and everyone's sign-ins stay on the volumes. Each time the app starts it migrates the database forward from wherever it is, so you can skip releases: any earlier release upgrades straight to the newest. Watch `docker compose logs app` for `cabane-api listening`.
 
 The version is on the compose file's two `image:` lines. Changing them by hand to a newer release's number does the same as taking its files, as long as that release's compose file has no other change. Take the files: that's the one that's always right. Going back to an older release isn't supported once the newer one has migrated the database: restore the backup you took before upgrading instead.
 
-**A companion older than its instance.** The built-in runner moves with the compose file, so it's always the instance's own release. A companion elsewhere doesn't: a runner image on another machine, or one installed with npm. While it's within the range the instance accepts, it keeps working, and its log says the two versions differ. Once it's older than the oldest companion the instance accepts, its agents stop answering, and the conversation says the companion on that device is out of date. Update it to the instance's release: the runner image at that version, or `cabane update` for one installed with npm or the install script, which installs the instance's own version.
+**A companion older than its instance.** The built-in runner moves with the compose file, so it's the instance's own release, unless `RUNNER_IMAGE` names an image of your own: then the built-in runner, its turns and the egress proxy are whatever release that image was built from ([Adding tools for agents](#adding-tools-for-agents)). A companion elsewhere doesn't: a runner image on another machine, or one installed with npm. While it's within the range the instance accepts, it keeps working, and its log says the two versions differ. Once it's older than the oldest companion the instance accepts, its agents stop answering, and the conversation says the companion on that device is out of date. Update it to the instance's release: the runner image at that version, or `cabane update` for one installed with npm or the install script, which installs the instance's own version.
 
 ---
 
@@ -200,6 +202,36 @@ docker compose up -d
 
 People sign in as before and find their files, and the built-in runner answers without being paired again. Check it with `docker compose exec companion cabane status`: if a harness shows as not signed in on the new machine, sign in again as in step 5. Restoring refuses to write over an instance that's already there. To replace one on the same machine, back it up first, remove it with `docker compose down -v`, which erases it, and then restore.
 
+### One workspace, to another instance
+
+A backup copies the whole instance. To move **one workspace** to another instance, or keep a copy of just that workspace, export it as a file and import that file on the other side. From the `cabane` folder:
+
+```bash
+docker compose exec -T app node dist/workspace.js export <slug or id> > workspace.cabane
+docker compose exec -T app node dist/workspace.js import - < workspace.cabane
+```
+
+Export writes the file to standard output (or to `--out <file>` inside the container) and says what it did on the terminal. The file holds every private room and direct message in the workspace: keep it as safe as a backup.
+
+**What the file holds:** the workspace's rooms, conversations and messages, tasks, agents and their settings, files with their history and their bytes, each turn's attempts and prompt, and the people its rows name, with their names, emails and pictures. The workspace keeps its id, and so does everything in it, so every link inside a message or a file still opens the right thing.
+
+**What it leaves out:** passwords, sessions and tokens; connections and secrets; hooks and webhooks; invites that were still pending; browser profiles; and every device and pairing. Agents arrive with no device. Schedules arrive switched off. Import ends with a list of all of these, by name, to set up again.
+
+**People.** Someone whose account is already on the target, under the same id, keeps that account exactly as it is there, name and picture included. Someone new arrives with an account that has no password: import prints a link to set one (it works for an hour; after that, use **Forgot password**), or emails it when the instance can send email. Nobody is matched by email: if a new person's email already belongs to a different account here, import refuses and names it. Importing into a new instance creates accounts, so its first-run screen doesn't show; people get in through their links.
+
+**Export refuses while an agent is mid-turn** in the workspace, and names the agent and the conversation. Run it again when the turn has ended, or pass `--wait <seconds>` to keep trying for that long. A quiet moment, or stopping the agents first, is the way to export a busy workspace.
+
+**Reminders and waiting work.** A reminder an agent set for itself travels and lands at its time. If its agent isn't on a device by then, the conversation shows the usual notice that the agent has no device, and nothing runs; name the agent in the conversation again once it is placed to pick the work up. Import prints when the first reminder is due. A delivery that was on its way to an agent when the export was taken is ended on the target after half an hour, with the usual notice that the agent didn't respond. News an agent hadn't read yet waits, and starts nothing on its own: the agent reads it the next time it is woken in that conversation. If the old instance keeps running, its copies of the reminders fire there too, until it is retired.
+
+**Import refuses**, writing nothing, when:
+
+- the workspace is already on this instance (delete it first to restore over it);
+- the owner already has a workspace with the same slug here;
+- a new person's email belongs to another account here;
+- the two instances aren't on the same database migration. The message names the migration the file was taken at: install the release that carries it.
+
+Import loads the whole workspace in one step: if anything fails, no part of it is left behind, and the same file imports cleanly once the cause is fixed. Stored files it wrote before the failure stay, unused, and are written over by the next try.
+
 ---
 
 ## Going further
@@ -219,11 +251,23 @@ See [TRUST.md](./TRUST.md) for what running Cabane yourself promises: it keeps w
 By default the built-in runner is one container that every agent shares. With `compose.turns.yaml` laid over `compose.yaml`, it starts a container for each turn instead and removes it when the turn ends, is stopped or fails:
 
 - two agents can't read each other's files or reach each other;
-- a turn can't reach this machine, Postgres, the runner or a private network. Its only route out is the `egress` service, a Squid proxy run from the runner's own image ([egress.conf](egress.conf)), which allows web ports and the instance, and refuses private, loopback, link-local and reserved addresses and this machine's own;
-- a turn never holds the model credentials or the GitHub token in the runner's `secrets.json`, only stand-ins for them (below);
-- nothing a turn started outlives it, and a turn killed for memory is reported as out of memory.
+- a turn can't reach this machine, Postgres, the runner or a private network. Its only route out is the `egress` service, a Squid proxy run from the runner's own image ([egress.conf](egress.conf)), which allows web ports, the instance and its pages at `cabane-pages`, and refuses private, loopback, link-local and reserved addresses and this machine's own;
+- a turn never holds a value with addresses, only a stand-in for it (below): a room secret whose owner gave it addresses, a connection's own key, and the model credentials and GitHub token in the runner's `secrets.json`;
+- nothing a turn started outlives it, unless it is serving on the turn's ports when those are on ([below](#ports-a-person-can-open)), and a turn killed for memory is reported as out of memory.
 
-Each conversation and agent keeps a home volume, `cabane-home-<conversation>-<agent>`, with the agent's working folder and the harness's sessions, so the next turn picks up where the last left off. These volumes are kept until you remove them.
+Each conversation and agent keeps a home volume, `cabane-home-<conversation>-<agent>`, with the agent's working folder and the harness's sessions, so the next turn picks up where the last left off. An agent that clones a repository and installs its packages can leave a few GB in each. These volumes are kept until you remove them, or until the disk needs the room when `MIN_FREE_DISK_GB` is set (below).
+
+**When the disk runs low.** With `MIN_FREE_DISK_GB` set, a turn about to start first checks free space on the disk Docker keeps volumes on. Under the floor, the runner deletes the home volumes idle longest, oldest first, until free space is back above it, and then starts the turn. A home is deleted only if:
+
+- the runner has run a turn in it since this setting was set, and recorded when that turn ended (in its own `~/.cabane/turn-homes.json`, never in a home). A turn the runner was stopped or restarted during counts as ending when the runner next starts a turn. If the runner can't save that a turn is starting, the turn is refused;
+- no turn has used it for `HOME_IDLE_HOURS`, and nothing in it has changed for that long, as the disk itself says (read with `find` in a short-lived container that mounts it read-only, to the second). A home a turn wrote to within that time is kept, even if the record missed that turn;
+- no turn is running in it or waiting to start in it.
+
+If that doesn't free enough, the turn is refused before anything is made for it. The conversation says the agent's device couldn't set up a place to run the turn, and the runner's log (`docker compose logs companion`) says the disk is full, with the free space and the floor. Nothing is deleted for its age alone: with a large disk every home is kept. Without `MIN_FREE_DISK_GB`, nothing is deleted or refused, and the runner keeps no record, removing the one from before if it can. The record is trusted only if no run could have used a home without it since it was written: one with no floor, or an older runner, starts the record again the next time a floor is set, so nothing is deleted until homes are used again. The runner checks this with a container it creates and never starts, labelled `cabane.role=homes-seal`; any runner start removes it, and removing it by hand has the same effect.
+
+**One companion per agent on a Docker.** A home is named for its conversation and agent, not for the companion, so two companions on the same Docker running the same agent share its homes. Neither records the other's turns. A turn of the other's that wrote nothing and was cut short isn't protected, and its home can go as soon as this runner's record calls it idle. With `MIN_FREE_DISK_GB` set, give each agent one companion per Docker.
+
+Deleting a home loses what the agent left in it: the working folder, with anything not pushed or saved to the workspace, and the harness's memory of that conversation, so the next turn there starts a fresh session. The conversation, its messages and its files are the instance's, and stay. Volumes the runner has no record of, such as homes from before this setting or another companion's, are never deleted; list homes with `docker volume ls --filter label=cabane.role=home` and remove one you don't need with `docker volume rm`.
 
 **Turn it on.** The runner needs Docker's socket, which is control of this machine. The turns' containers never get it.
 
@@ -236,32 +280,58 @@ Put both files on every `docker compose` command from then on, or set `COMPOSE_F
 
 **Sign in.** A sign-in made with `claude auth login` inside the runner stays in the runner and doesn't reach a turn's container. Put the harness's key in the runner's `~/.cabane/secrets.json` instead, and every turn can use its own harness's key: `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `ANTHROPIC_API_KEY` for Claude Code, `CODEX_API_KEY` for Codex. `GH_TOKEN` there is for git and `gh`.
 
+Codex signed in with a ChatGPT account works here too, signed in as in step 2: `docker compose exec companion codex login --device-auth`. The sign-in stays in the runner, each Codex turn gets a stand-in for it, and the runner refreshes it a day before it expires, since no Codex runs there to do it. Sign in inside the runner itself, never by copying `auth.json` from a machine that goes on using it: a refresh replaces the sign-in's refresh token, and the other machine's copy can't be relied on after that. While the sign-in is expired, Codex shows as not signed in and its turns are refused; the runner keeps trying, also as a Codex turn arrives, and turns resume once a refresh gets through. If the sign-in service refuses a refresh for good, sign in again. A `CODEX_API_KEY` in `secrets.json` is used instead whenever it is there.
+
 ```bash
 echo '{"CLAUDE_CODE_OAUTH_TOKEN": "…"}' |
   docker compose exec -T companion sh -c 'umask 077; cat > ~/.cabane/secrets.json'
 ```
 
-**What a turn holds.** Those four credentials never enter a turn's container. The turn gets a stand-in for each, the same one every time for that conversation and agent, so a repository it cloned keeps working. The egress proxy replaces the stand-in with the real credential only on a request from that turn's container to that credential's own service (`api.anthropic.com`, `api.openai.com`, `github.com`, `api.github.com`), sent over TLS. A stand-in is worth nothing anywhere else, from any other container, or once its turn is over.
+**What a turn holds.** A value with addresses never enters a turn's container: a room secret whose owner gave it addresses, a connection's own key at an `https://` address on port 443, four credentials in `secrets.json`, sent to their own services (`api.anthropic.com`, `api.openai.com`, `github.com`, `api.github.com`), and Codex's ChatGPT sign-in, sent to `chatgpt.com`. The runner tells the instance that its turns keep values out, and the turn gets a stand-in for each value, the same one every time for that conversation and agent, so a repository it cloned keeps working. The egress proxy puts the real value in place of the stand-in, in any request header, only on a request from that turn's container to one of the value's own hosts, sent over TLS to port 443. A stand-in is worth nothing anywhere else, from any other container, or once its turn is over. A secret's or connection's page shows, for each device its agents run on, whether that device keeps it from agents.
 
-- **The egress proxy intercepts TLS for those four hosts.** To replace a stand-in it has to read the request, so it terminates TLS for those four hosts and no others, and still checks each host's real certificate. It signs those connections with a certificate authority (CA) it generates each time it starts and keeps in memory, and the turn's container trusts that CA. Connections to every other host are tunnelled untouched, with the host's own certificate.
-- **Refused on those hosts:** plain HTTP, and the requests that create or reveal a credential, such as adding an SSH key to GitHub.
-- **Passed to the turn unchanged:** anything else in `secrets.json`, and the workspace's room secrets and connections.
-- **Not covered:** a Codex pointed at another address in its `config.toml` (an injected credential won't work there), Codex on a ChatGPT sign-in, GitHub Enterprise, and a response that echoes a credential back.
-- **If the egress proxy stops or restarts** while a turn runs, the turn fails within 30 seconds, saying so, and isn't run again. Restarting it during work does this to every turn running.
-- **A credential with any character but letters, digits and `. _ + / = -`** refuses every turn, naming it but not showing its value.
+- **The egress proxy intercepts TLS only for the hosts a turn holds a stand-in for.** To replace a stand-in it has to read the request, so it terminates TLS for those hosts and no others, and still checks each host's real certificate. It signs those connections with a certificate authority (CA) it generates each time it starts and keeps in memory, and the turn's container trusts that CA. Connections to every other host are tunnelled untouched, with the host's own certificate. Which hosts those are comes from a table the runner replaces as turns start and end, so a turn starting never reloads the proxy.
+- **Refused on those hosts:** plain HTTP, and the requests that create or reveal a credential, such as adding an SSH key to GitHub. A WebSocket upgrade is let through with the real value; nothing sent after it is read. While the runner holds a ChatGPT sign-in, the egress proxy also intercepts `auth.openai.com` for one thing only: refusing a turn's attempt to refresh the sign-in there.
+- **Passed to the turn unchanged:** anything else in `secrets.json`, and room secrets with no addresses.
+- **Left out of the turn, and the agent told why:** a connection with a key of its own at any other address (another port, plain HTTP, an IP address or a name with no dot), or whose key holds a line break or a character a request can't carry as it is.
+- **Not covered:** a Codex pointed at another address in its `config.toml` (a stand-in won't work there), and a response that echoes a value back.
+- **If the egress proxy stops or restarts** while a turn runs, the turn fails within 30 seconds, saying so, and isn't run again. Restarting it during work does this to every turn running. The proxy stops when Squid or the swap service beside it stops.
+- **A credential in `secrets.json` a request can't carry as it is** (a line break, a character outside visible ASCII, or a space at either end) refuses every turn, naming it but not showing its value.
 
 **Settings**, in `.env`:
 
-| Variable               | Default  |                                                                                                                                                                                                          |
-| ---------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `TURN_MEMORY_MB`       | `4096`   | Each turn's memory, with no swap beyond it. A command that outgrows it fails with its own error, such as Node's "heap out of memory", and isn't reported as out of memory: this is the setting to raise. |
-| `TURN_CPUS`            | `2`      | Each turn's processors.                                                                                                                                                                                  |
-| `TURN_PIDS`            | `512`    | Each turn's processes.                                                                                                                                                                                   |
-| `MAX_CONCURRENT_TURNS` | `4`      | Turns running at the same time; the rest wait. A turn still waiting after 30 minutes fails, and the person is told.                                                                                      |
-| `TURN_CGROUP_PARENT`   | unset    | A control group (or systemd slice) of yours that every turn's container is started under, so your own limit on it caps them all. The runner doesn't create it or set its limit.                          |
-| `TURN_NETWORK`         | `closed` | `open` gives each turn an ordinary bridge with a direct route out as well as the egress proxy.                                                                                                           |
+| Variable                  | Default     |                                                                                                                                                                                                          |
+| ------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TURN_MEMORY_MB`          | `4096`      | Each turn's memory, with no swap beyond it. A command that outgrows it fails with its own error, such as Node's "heap out of memory", and isn't reported as out of memory: this is the setting to raise. |
+| `TURN_CPUS`               | `2`         | Each turn's processors.                                                                                                                                                                                  |
+| `TURN_PIDS`               | `512`       | Each turn's processes.                                                                                                                                                                                   |
+| `MAX_CONCURRENT_TURNS`    | `4`         | Turns running at the same time; the rest wait. A turn still waiting after 30 minutes fails, and the person is told.                                                                                      |
+| `MIN_FREE_DISK_GB`        | unset       | Free space, in GB, on the disk Docker keeps volumes on, under which a turn first deletes the home volumes idle longest, and is refused if that isn't enough. Unset: no home is ever deleted.             |
+| `HOME_IDLE_HOURS`         | `24`        | How long a home must have gone unused before it can be deleted to make room.                                                                                                                             |
+| `TURN_CGROUP_PARENT`      | unset       | A control group (or systemd slice) of yours that every turn's container is started under, so your own limit on it caps them all. The runner doesn't create it or set its limit.                          |
+| `TURN_NETWORK`            | `closed`    | `open` gives each turn an ordinary bridge with a direct route out as well as the egress proxy.                                                                                                           |
+| `TURN_PORTS`              | unset       | A range of ports on this machine, such as `20000-20029`, that a person can open an agent's app on, with `compose.ports.yaml` ([below](#ports-a-person-can-open)). Unset: nothing outside reaches a turn. |
+| `TURN_PORTS_HOST`         | `localhost` | The name or address people reach this machine by, which an agent gives them with its ports.                                                                                                              |
+| `TURN_PORTS_IDLE_MINUTES` | `30`        | How long an app kept after its turn stays up with nothing connected to it.                                                                                                                               |
 
 Turns together can take `TURN_MEMORY_MB` times `MAX_CONCURRENT_TURNS`, 16 GB with the defaults. Nothing caps that total but `TURN_CGROUP_PARENT`.
+
+### Ports a person can open
+
+An agent that builds an app can show it running. With `TURN_PORTS` set to a range of ports and `compose.ports.yaml` laid over the others, each conversation and agent gets three ports from the range, the same ones in every turn, and a turn is told them, with the address to give a person, in `CABANE_PORTS` (such as `20000,20001,20002`) and `CABANE_PORTS_HOST`. An app the agent serves on one of them, listening on all of the container's addresses (`0.0.0.0`, not `localhost`), opens at `http://<TURN_PORTS_HOST>:<port>`, WebSockets included.
+
+```bash
+echo 'TURN_PORTS=20000-20029' >> .env
+echo 'TURN_PORTS_HOST=cabane-box.example.com' >> .env
+docker compose -f compose.yaml -f compose.turns.yaml -f compose.ports.yaml up -d
+```
+
+- **Anyone who can reach this machine on those ports can open the app.** Cabane doesn't check who. For https, names or a sign-in, put a proxy of your own in front, or publish the range on a private address only by editing `compose.ports.yaml`.
+- **The way in is the egress proxy's.** It publishes the range, and a relay beside Squid passes each connection to the one turn container that owns the port, on the same port. It connects nowhere else, and a connection from a turn's own network is refused, so one turn can't reach another's app through it. Nothing a turn could reach before is reachable now.
+- **An app still serving when its turn ends is kept**, with its container, until nothing has connected to its ports for `TURN_PORTS_IDLE_MINUTES`, the next turn in that conversation starts, someone stops the turn, the egress proxy restarts, or the runner restarts. It keeps its files and its route out, but none of the turn's credentials: no stand-in in it works any more. It doesn't count against `MAX_CONCURRENT_TURNS`, and does count against memory. A container with nothing listening on its ports is removed when its turn ends, as before.
+- **A range serves a third as many conversations and agents as it has ports**, rounded down: `20000-20029` serves ten. A conversation and agent keep their three for as long as their home volume exists, so a link handed out never leads to another conversation's app. Once every three belong to a home that still exists, a turn in a conversation new to the runner gets no ports, and the runner's log says so: widen the range, or remove homes you no longer need (`docker volume rm`), whose ports are then given again. A home deleted for disk gives its ports back.
+- **The range can't include 3128 or 1344**, which the egress proxy listens on itself: the runner refuses the setting, and the egress proxy refuses to start with it.
+
+Without `TURN_PORTS`, turns' containers and networks are exactly as above. With it set but without `compose.ports.yaml`, turns fail, and the runner's log says the egress proxy doesn't publish the ports.
 
 **Not yet:**
 
@@ -277,7 +347,47 @@ CABANE_BASE_URL=https://cabane.example.com docker compose -f compose.companion.y
 docker compose -f compose.companion.yaml logs companion       # the pairing code
 ```
 
-Pair it, sign it in as above and place agents on it as in step 5. It shows up as `cabane-companion`, or `COMPANION_NAME`. The settings above apply to it too.
+Pair it, sign it in as above and place agents on it as in step 5. It shows up as `cabane-companion`, or `COMPANION_NAME`. The settings above apply to it too, ports with `-f compose.companion.yaml -f compose.ports.yaml`.
+
+## Adding tools for agents
+
+Agents work inside the runner image, as the user `node`, not root. Besides Claude Code and Codex it carries git, curl, jq, ripgrep, Node with npm, pnpm and yarn, Python 3 with pip and venv, the GitHub CLI (`gh`), a C compiler and make, zip and unzip, and a headless Chromium for Playwright. What an agent installs outside its home doesn't last: the runner's container is replaced at every upgrade, and a container per turn starts from the image every time.
+
+- **Python packages** go in a virtual environment in the agent's home, `python3 -m venv .venv` then `.venv/bin/pip install …`. Debian's Python refuses `pip install` outside one.
+- **The browser** is Chromium's headless shell, the build the image's own Playwright starts headless (`playwright` on the path), at the version the instance's Playwright MCP runs. Playwright MCP starts it with no setting. A launch that asks for the full Chromium (a `channel`, or a window), or a project's Playwright of another version, wants its own build: `npx playwright install chromium` fetches it.
+- **What the browser loads.** A page an agent built in a workspace, with its sibling files and its calls to `/api`: an agent in the runner that asks for a page's address is given one at `cabane-pages`, the app's name for pages on the runner's own network, and its browser opens it there. That address works only inside the runner. A page an agent serves itself, in its own container, loads too. With [a container per turn](#each-turn-in-a-container-of-its-own), a host the turn holds a stand-in for (`api.github.com` when `GH_TOKEN` is in `secrets.json`, or a secret's own hosts) fails in the browser with a certificate error, since the browser doesn't trust the egress proxy's certificate authority; `gh`, git, curl and Node do.
+
+**For anything more, build an image of your own** on this release's runner image and name it in `.env`. Keep the user `node` and its home, `/home/node`: the runner and every turn's container run as that user. For example, `runner/Dockerfile` beside the compose files:
+
+```dockerfile
+ARG CABANE_RUNNER
+FROM ${CABANE_RUNNER}
+USER root
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends postgresql-client \
+  && rm -rf /var/lib/apt/lists/*
+USER node
+```
+
+Build it on this release's runner image, name it in `.env`, and bring the instance up:
+
+```bash
+docker build --pull -t cabane-runner-own runner \
+  --build-arg CABANE_RUNNER="$(RUNNER_IMAGE= docker compose config --images | grep -m1 companion)"
+echo 'RUNNER_IMAGE=cabane-runner-own' >> .env
+docker compose up -d
+```
+
+The built-in runner, every turn's container and the egress proxy then run your image. The egress proxy always runs the runner's image, since the runner writes what it reads. Take the line out of `.env` and `docker compose up -d` to go back to the release's image.
+
+**Build it again at every upgrade**, on the new release's image, before you bring the instance up: an image built on an older release isn't supported under a newer release's files. Take the files, build, then `docker compose up -d`, which pulls the new release's server image itself. Leave out `docker compose pull`: it can't pull an image that was only ever built on this machine.
+
+```bash
+curl -fsSL https://github.com/cabane-ai/cabane-releases/releases/latest/download/cabane.tar.gz | tar -xz --strip-components=1
+docker build --pull -t cabane-runner-own runner \
+  --build-arg CABANE_RUNNER="$(RUNNER_IMAGE= docker compose config --images | grep -m1 companion)"
+docker compose up -d
+```
 
 ## On a domain
 

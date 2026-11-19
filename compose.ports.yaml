@@ -1,0 +1,20 @@
+# Cabane 0.6.263, released from 09e4c8cfc64cc16ab08f4d08172a0856b7ccff36.
+# Ports a person can open on each turn's container, over compose.turns.yaml or
+# compose.companion.yaml, with TURN_PORTS set in .env to a range of them:
+#
+#   docker compose -f compose.yaml -f compose.turns.yaml -f compose.ports.yaml up -d
+#
+# The egress proxy publishes the range on this machine, and its relay passes a
+# connection to a port on to the turn container that owns it. Each
+# conversation and agent gets three of them. Whoever can reach this machine on
+# one can open what an agent serves there: Cabane doesn't check who. README:
+# "Ports a person can open".
+
+services:
+  egress:
+    environment:
+      # Read by the egress proxy's start, which refuses a range holding a port it
+      # listens on itself (3128, 1344) before anything listens.
+      TURN_PORTS: ${TURN_PORTS:?set TURN_PORTS to a range of ports, such as 20000-20029}
+    ports:
+      - '${TURN_PORTS:?set TURN_PORTS to a range of ports, such as 20000-20029}:${TURN_PORTS}'

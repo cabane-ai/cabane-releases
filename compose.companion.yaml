@@ -1,6 +1,8 @@
-# Cabane 0.6.252, released from 8a401f6b0e4487946202fc905dcfb9e15a1c7d3b. Both of Cabane's images below are
-# this release; `docker compose up -d` here pulls them. To upgrade, put the next
+# Cabane 0.6.263, released from 09e4c8cfc64cc16ab08f4d08172a0856b7ccff36. Cabane's images below are this
+# release; `docker compose up -d` here pulls them. To upgrade, put the next
 # release's files over these and run `docker compose pull` and `docker compose up -d`.
+# RUNNER_IMAGE in .env names an image of your own, built on this release's
+# runner image, in its place (README: Adding tools for agents).
 # A companion on its own machine, with each agent turn in a container of its
 # own, paired to a Cabane elsewhere. Two containers from one image: the
 # companion and the egress proxy, the Squid every turn's network leads to
@@ -16,7 +18,7 @@ name: cabane-companion
 
 services:
   companion:
-    image: ghcr.io/cabane-ai/cabane-companion:0.6.252
+    image: ${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.263}
     restart: unless-stopped
     mem_limit: ${COMPANION_MEMORY_LIMIT:-0}
     # The device's name in the app.
@@ -29,13 +31,18 @@ services:
       CABANE_ALLOW_PLAIN_HTTP_HOST: ${CABANE_ALLOW_PLAIN_HTTP_HOST:-}
       CABANE_RUNNER: >-
         {"executor":"docker","docker":{
-        "image":"ghcr.io/cabane-ai/cabane-companion:0.6.252",
+        "image":"${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.263}",
         "egress":"${COMPOSE_PROJECT_NAME:-cabane-companion}-egress-1",
         "network":"${TURN_NETWORK:-closed}",
         "memoryMb":"${TURN_MEMORY_MB:-4096}",
         "cpus":"${TURN_CPUS:-2}",
         "pids":"${TURN_PIDS:-512}",
         "maxConcurrentTurns":"${MAX_CONCURRENT_TURNS:-4}",
+        "minFreeDiskGb":"${MIN_FREE_DISK_GB:-}",
+        "homeIdleHours":"${HOME_IDLE_HOURS:-24}",
+        "ports":"${TURN_PORTS:-}",
+        "portsHost":"${TURN_PORTS_HOST:-}",
+        "portsIdleMinutes":"${TURN_PORTS_IDLE_MINUTES:-30}",
         "cgroupParent":"${TURN_CGROUP_PARENT:-}"}}
     volumes:
       - companion_home:/home/node
@@ -47,7 +54,7 @@ services:
   egress:
     # The companion's own image, which carries the OpenSSL build of Squid and
     # the lookup helper the egress proxy asks (./egress.sh, ./egress.conf).
-    image: ghcr.io/cabane-ai/cabane-companion:0.6.252
+    image: ${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.263}
     restart: unless-stopped
     mem_limit: ${EGRESS_MEMORY_LIMIT:-0}
     user: proxy

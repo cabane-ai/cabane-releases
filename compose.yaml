@@ -1,6 +1,8 @@
-# Cabane 0.6.252, released from 8a401f6b0e4487946202fc905dcfb9e15a1c7d3b. Both of Cabane's images below are
-# this release; `docker compose up -d` here pulls them. To upgrade, put the next
+# Cabane 0.6.263, released from 09e4c8cfc64cc16ab08f4d08172a0856b7ccff36. Cabane's images below are this
+# release; `docker compose up -d` here pulls them. To upgrade, put the next
 # release's files over these and run `docker compose pull` and `docker compose up -d`.
+# RUNNER_IMAGE in .env names an image of your own, built on this release's
+# runner image, in its place (README: Adding tools for agents).
 # Cabane: `docker compose up` from this directory, nothing to
 # prepare first. Open the app at $PUBLIC_BASE_URL (default http://localhost:8788).
 #
@@ -45,7 +47,7 @@ services:
       retries: 20
 
   app:
-    image: ghcr.io/cabane-ai/cabane:0.6.252
+    image: ghcr.io/cabane-ai/cabane:0.6.263
     restart: unless-stopped
     mem_limit: ${APP_MEMORY_LIMIT:-0}
     depends_on:
@@ -69,6 +71,13 @@ services:
       # session of whoever opens it. Blank on localhost, where pages share the
       # app's origin (README: the trade for "no cloud").
       CONTENT_BASE_URL: ${CABANE_PAGES_DOMAIN:+https://}${CABANE_PAGES_DOMAIN:-}
+      # The app's two names on the `runner` network: the one the runner calls
+      # it at, and `cabane-pages`, which serves pages only. An agent in the
+      # runner that asks at the first for a page's address is handed one at the
+      # second, which its browser loads; a browser won't load plain http from a
+      # host named `app`. Not a setting: they are this file's names.
+      RUNNER_BASE_URL: http://app:8788
+      RUNNER_PAGES_BASE_URL: http://cabane-pages:8788
       # Optional: blank, the app uses the ones it made (see .env.example).
       VISION_URL_SIGNING_SECRET: ${VISION_URL_SIGNING_SECRET:-}
       CABANE_SIGNING_SECRET_PREVIOUS: ${CABANE_SIGNING_SECRET_PREVIOUS:-}
@@ -86,8 +95,9 @@ services:
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAIL_FROM: ${EMAIL_FROM:-}
       EMAIL_REPLY_TO: ${EMAIL_REPLY_TO:-}
-      # The privacy notice the sign-up screens link to. Blank: no link.
+      # The privacy notice and terms of use the sign-up screens link to. Blank: no link.
       PRIVACY_NOTICE_URL: ${PRIVACY_NOTICE_URL:-}
+      TERMS_URL: ${TERMS_URL:-}
     # The app's port: published on PORT on localhost, and not published at all
     # on a domain, where the edge is the only entry point. Compose can't drop a list
     # entry by a setting, so the choice is which service in publish.yaml this
@@ -105,9 +115,12 @@ services:
       - storage:/data/storage
       - secrets:/data/secrets
     networks:
-      - default
-      - data
-      - runner
+      default:
+      data:
+      runner:
+        # Pages only, on this network only (RUNNER_PAGES_BASE_URL above).
+        aliases:
+          - cabane-pages
     healthcheck:
       # Serving: migrations are done. The runner waits for this before pairing.
       test:
@@ -128,7 +141,7 @@ services:
   # BUILT_IN_RUNNER=0 to leave it out; the instance doesn't need it, and agents
   # can run on companions paired from other machines instead.
   companion:
-    image: ghcr.io/cabane-ai/cabane-companion:0.6.252
+    image: ${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.263}
     scale: ${BUILT_IN_RUNNER:-1}
     restart: unless-stopped
     # The limit is the whole runner's, every turn in it together (README: What
