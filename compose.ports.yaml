@@ -1,13 +1,15 @@
-# Cabane 0.6.265, released from b992e897c6d7877ec90a363660f1b9a217af6b46.
+# Cabane 0.6.274, released from ec2c07fa834f9313014ae12e786d3a4871509a37.
 # Ports a person can open on each turn's container, over compose.turns.yaml or
 # compose.companion.yaml, with TURN_PORTS set in .env to a range of them:
 #
 #   docker compose -f compose.yaml -f compose.turns.yaml -f compose.ports.yaml up -d
 #
-# The egress proxy publishes the range on this machine, and its relay passes a
-# connection to a port on to the turn container that owns it. Each
-# conversation and agent gets three of them. Whoever can reach this machine on
-# one can open what an agent serves there: Cabane doesn't check who. README:
+# The egress proxy publishes the range on TURN_PORTS_BIND, an IPv4 address of
+# this machine (default 127.0.0.1, this machine only; 0.0.0.0 for every one),
+# and its relay passes a connection to a port on to the turn container that
+# owns it. Each conversation and agent gets three of them. Whoever can reach
+# that address on one can open what an agent serves there: Cabane doesn't check
+# who. Set the address in .env, not here: an upgrade replaces this file. README:
 # "Ports a person can open".
 
 services:
@@ -17,4 +19,4 @@ services:
       # listens on itself (3128, 1344) before anything listens.
       TURN_PORTS: ${TURN_PORTS:?set TURN_PORTS to a range of ports, such as 20000-20029}
     ports:
-      - '${TURN_PORTS:?set TURN_PORTS to a range of ports, such as 20000-20029}:${TURN_PORTS}'
+      - '${TURN_PORTS_BIND:-127.0.0.1}:${TURN_PORTS:?set TURN_PORTS to a range of ports, such as 20000-20029}:${TURN_PORTS}'

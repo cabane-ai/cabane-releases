@@ -107,7 +107,7 @@ docker run -d --name cabane-companion --restart unless-stopped \
   --hostname my-runner \
   -e CABANE_BASE_URL=https://cabane.example.com \
   -v cabane-companion-home:/home/node \
-  ghcr.io/cabane-ai/cabane-companion:0.6.265               # the instance's version
+  ghcr.io/cabane-ai/cabane-companion:0.6.274               # the instance's version
 docker logs cabane-companion                               # the pairing code
 docker exec -it cabane-companion claude auth login         # or: codex login --device-auth
 docker exec cabane-companion cabane status
@@ -178,6 +178,10 @@ With `RUNNER_IMAGE` set in `.env`, build your image again on the new release's b
 The download replaces the compose file and the scripts and leaves your `.env` alone. Your data, the runner's pairing and everyone's sign-ins stay on the volumes. Each time the app starts it migrates the database forward from wherever it is, so you can skip releases: any earlier release upgrades straight to the newest. Watch `docker compose logs app` for `cabane-api listening`.
 
 The version is on the compose file's two `image:` lines. Changing them by hand to a newer release's number does the same as taking its files, as long as that release's compose file has no other change. Take the files: that's the one that's always right. Going back to an older release isn't supported once the newer one has migrated the database: restore the backup you took before upgrading instead.
+
+**A runner on a Docker without root, from 0.6.265 or earlier.** From this release its turns are refused until `MACHINE_ADDRESSES` in `.env` names this machine's addresses: [Each turn in a container of its own](#each-turn-in-a-container-of-its-own), On a Docker without root.
+
+**Ports a person can open, from 0.6.265 or earlier.** The range was published on every address this machine has. From this release it's published on `127.0.0.1` alone, unless `TURN_PORTS_BIND` in `.env` names another IPv4 address, and on no IPv6 address. If other machines open your agents' apps over IPv4, add `TURN_PORTS_BIND=0.0.0.0` to `.env` before `docker compose up -d`. If you add `compose.ports.yaml` with `-f` rather than in `COMPOSE_FILE`, add it to `COMPOSE_FILE` too, or the upgrade's `docker compose up -d` publishes no ports at all. If anyone opens them over IPv6, at this machine's IPv6 address or a name that leads only to it, no supported setting brings that back: give them an IPv4 address or name, with `TURN_PORTS_HOST` saying which, or put a proxy of your own in front. [Ports a person can open](#ports-a-person-can-open).
 
 **A companion older than its instance.** The built-in runner moves with the compose file, so it's the instance's own release, unless `RUNNER_IMAGE` names an image of your own: then the built-in runner, its turns and the egress proxy are whatever release that image was built from ([Adding tools for agents](#adding-tools-for-agents)). A companion elsewhere doesn't: a runner image on another machine, or one installed with npm. While it's within the range the instance accepts, it keeps working, and its log says the two versions differ. Once it's older than the oldest companion the instance accepts, its agents stop answering, and the conversation says the companion on that device is out of date. Update it to the instance's release: the runner image at that version, or `cabane update` for one installed with npm or the install script, which installs the instance's own version.
 
@@ -251,7 +255,8 @@ See [TRUST.md](./TRUST.md) for what running Cabane yourself promises: it keeps w
 By default the built-in runner is one container that every agent shares. With `compose.turns.yaml` laid over `compose.yaml`, it starts a container for each turn instead and removes it when the turn ends, is stopped or fails:
 
 - two agents can't read each other's files or reach each other;
-- a turn can't reach this machine, Postgres, the runner or a private network. Its only route out is the `egress` service, a Squid proxy run from the runner's own image ([egress.conf](egress.conf)), which allows web ports, the instance and its pages at `cabane-pages`, and refuses private, loopback, link-local and reserved addresses and this machine's own;
+- a turn can't reach this machine, Postgres, the runner or a private network. Its only route out is the `egress` service, a Squid proxy run from the runner's own image ([egress.conf](egress.conf)), which allows web ports, the instance and its pages at `cabane-pages`, and refuses private, loopback, link-local and reserved addresses and this machine's own. The runner finds this machine's addresses itself, but on a Docker without root it may not see them, and on Docker Desktop it doesn't see the Mac's, so there it has to be told them in `MACHINE_ADDRESSES` (below, On a Docker without root, and On Docker Desktop on a Mac): any it isn't told and doesn't see, a turn can reach;
+- an app a turn serves is reached from inside that turn directly, at `localhost`, `127.0.0.1` or `[::1]`: the turn's `NO_PROXY` names loopback and nothing else;
 - a turn never holds a value with addresses, only a stand-in for it (below): a room secret whose owner gave it addresses, a connection's own key, and the model credentials and GitHub token in the runner's `secrets.json`;
 - nothing a turn started outlives it, unless it is serving on the turn's ports when those are on ([below](#ports-a-person-can-open)), and a turn killed for memory is reported as out of memory.
 
@@ -263,6 +268,8 @@ Each conversation and agent keeps a home volume, `cabane-home-<conversation>-<ag
 - no turn has used it for `HOME_IDLE_HOURS`, and nothing in it has changed for that long, as the disk itself says (read with `find` in a short-lived container that mounts it read-only, to the second). A home a turn wrote to within that time is kept, even if the record missed that turn;
 - no turn is running in it or waiting to start in it.
 
+**Slimming homes before deleting them.** With `HOME_REBUILDABLE` set as well, a turn short of room first clears those paths from the homes used longest ago, however recently, and keeps everything else in them, and deletes whole homes as above only if that isn't enough. Name what a turn can make again, relative to the home, separated by spaces or commas, with `*` matching within one folder name. For example, `.local/share/pnpm .npm/_cacache .cache work/*/node_modules` clears a pnpm store, npm's cache and each checkout's packages, and the next turn there reinstalls them. A home is slimmed only if the runner has recorded its last turn's end, no turn is running or waiting in it, and no container has it mounted, such as one still serving on its ports. Clearing a home counts as using it, so it isn't deleted until it has been idle `HOME_IDLE_HOURS` again. A symlink among the paths is removed, never what it points to.
+
 If that doesn't free enough, the turn is refused before anything is made for it. The conversation says the agent's device couldn't set up a place to run the turn, and the runner's log (`docker compose logs companion`) says the disk is full, with the free space and the floor. Nothing is deleted for its age alone: with a large disk every home is kept. Without `MIN_FREE_DISK_GB`, nothing is deleted or refused, and the runner keeps no record, removing the one from before if it can. The record is trusted only if no run could have used a home without it since it was written: one with no floor, or an older runner, starts the record again the next time a floor is set, so nothing is deleted until homes are used again. The runner checks this with a container it creates and never starts, labelled `cabane.role=homes-seal`; any runner start removes it, and removing it by hand has the same effect.
 
 **One companion per agent on a Docker.** A home is named for its conversation and agent, not for the companion, so two companions on the same Docker running the same agent share its homes. Neither records the other's turns. A turn of the other's that wrote nothing and was cut short isn't protected, and its home can go as soon as this runner's record calls it idle. With `MIN_FREE_DISK_GB` set, give each agent one companion per Docker.
@@ -272,7 +279,7 @@ Deleting a home loses what the agent left in it: the working folder, with anythi
 **Turn it on.** The runner needs Docker's socket, which is control of this machine. The turns' containers never get it.
 
 ```bash
-export DOCKER_GID=$(stat -c %g /var/run/docker.sock)   # Docker's own socket; a Docker without root: below
+export DOCKER_GID=$(stat -c %g /var/run/docker.sock)   # Linux, Docker's own socket; a Mac, or a Docker without root: below
 docker compose -f compose.yaml -f compose.turns.yaml up -d
 ```
 
@@ -287,7 +294,7 @@ echo '{"CLAUDE_CODE_OAUTH_TOKEN": "…"}' |
   docker compose exec -T companion sh -c 'umask 077; cat > ~/.cabane/secrets.json'
 ```
 
-**What a turn holds.** A value with addresses never enters a turn's container: a room secret whose owner gave it addresses, a connection's own key at an `https://` address on port 443, four credentials in `secrets.json`, sent to their own services (`api.anthropic.com`, `api.openai.com`, `github.com`, `api.github.com`), and Codex's ChatGPT sign-in, sent to `chatgpt.com`. The runner tells the instance that its turns keep values out, and the turn gets a stand-in for each value, the same one every time for that conversation and agent, so a repository it cloned keeps working. The egress proxy puts the real value in place of the stand-in, in any request header, only on a request from that turn's container to one of the value's own hosts, sent over TLS to port 443. A stand-in is worth nothing anywhere else, from any other container, or once its turn is over. A secret's or connection's page shows, for each device its agents run on, whether that device keeps it from agents.
+**What a turn holds.** A value with addresses never enters a turn's container: a room secret whose owner gave it addresses, a connection's own key at an `https://` address on port 443, four credentials in `secrets.json`, sent to their own services (`api.anthropic.com`, `api.openai.com`, `github.com`, `api.github.com`), and Codex's ChatGPT sign-in, sent to `chatgpt.com` and only on the paths Codex calls there. A turn holds a harness's sign-in only when it runs on that harness: the Claude ones on a Claude Code turn, Codex's on a Codex turn. That takes an instance that tells the runner each turn's harness; against an older one, every turn holds every sign-in, as before. The runner tells the instance that its turns keep values out, and the turn gets a stand-in for each value, the same one every time for that conversation and agent, so a repository it cloned keeps working. The egress proxy puts the real value in place of the stand-in, in any request header, only on a request from that turn's container to one of the value's own hosts, sent over TLS to port 443. A stand-in is worth nothing anywhere else, from any other container, or once its turn is over. A secret's or connection's page shows, for each device its agents run on, whether that device keeps it from agents.
 
 - **The egress proxy intercepts TLS only for the hosts a turn holds a stand-in for.** To replace a stand-in it has to read the request, so it terminates TLS for those hosts and no others, and still checks each host's real certificate. It signs those connections with a certificate authority (CA) it generates each time it starts and keeps in memory, and the turn's container trusts that CA. Connections to every other host are tunnelled untouched, with the host's own certificate. Which hosts those are comes from a table the runner replaces as turns start and end, so a turn starting never reloads the proxy.
 - **Refused on those hosts:** plain HTTP, and the requests that create or reveal a credential, such as adding an SSH key to GitHub. A WebSocket upgrade is let through with the real value; nothing sent after it is read. While the runner holds a ChatGPT sign-in, the egress proxy also intercepts `auth.openai.com` for one thing only: refusing a turn's attempt to refresh the sign-in there.
@@ -299,20 +306,23 @@ echo '{"CLAUDE_CODE_OAUTH_TOKEN": "…"}' |
 
 **Settings**, in `.env`:
 
-| Variable                  | Default     |                                                                                                                                                                                                          |
-| ------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `TURN_MEMORY_MB`          | `4096`      | Each turn's memory, with no swap beyond it. A command that outgrows it fails with its own error, such as Node's "heap out of memory", and isn't reported as out of memory: this is the setting to raise. |
-| `TURN_CPUS`               | `2`         | Each turn's processors.                                                                                                                                                                                  |
-| `TURN_PIDS`               | `512`       | Each turn's processes.                                                                                                                                                                                   |
-| `MAX_CONCURRENT_TURNS`    | `4`         | Turns running at the same time; the rest wait. A turn still waiting after 30 minutes fails, and the person is told.                                                                                      |
-| `MIN_FREE_DISK_GB`        | unset       | Free space, in GB, on the disk Docker keeps volumes on, under which a turn first deletes the home volumes idle longest, and is refused if that isn't enough. Unset: no home is ever deleted.             |
-| `HOME_IDLE_HOURS`         | `24`        | How long a home must have gone unused before it can be deleted to make room.                                                                                                                             |
-| `TURN_CGROUP_PARENT`      | unset       | A control group (or systemd slice) of yours that every turn's container is started under, so your own limit on it caps them all. The runner doesn't create it or set its limit.                          |
-| `TURN_NETWORK`            | `closed`    | `open` gives each turn an ordinary bridge with a direct route out as well as the egress proxy.                                                                                                           |
-| `TURN_PORTS`              | unset       | A range of ports on this machine, such as `20000-20029`, that a person can open an agent's app on, with `compose.ports.yaml` ([below](#ports-a-person-can-open)). Unset: nothing outside reaches a turn. |
-| `TURN_PORTS_HOST`         | `localhost` | The name or address people reach this machine by, which an agent gives them with its ports.                                                                                                              |
-| `TURN_PORTS_IDLE_MINUTES` | `30`        | How long an app kept after its turn stays up with nothing connected to it.                                                                                                                               |
-| `DOCKER_SOCKET`           | unset       | Docker's socket on this machine, which the runner is given. Unset: `/var/run/docker.sock`. Set it for a Docker without root (below), with `DOCKER_GID` read as it says there.                            |
+| Variable                  | Default     |                                                                                                                                                                                                                                                                                                                                             |
+| ------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TURN_MEMORY_MB`          | `4096`      | Each turn's memory, with no swap beyond it. A command that outgrows it fails with its own error, such as Node's "heap out of memory", and isn't reported as out of memory: this is the setting to raise.                                                                                                                                    |
+| `TURN_CPUS`               | `2`         | Each turn's processors.                                                                                                                                                                                                                                                                                                                     |
+| `TURN_PIDS`               | `512`       | Each turn's processes.                                                                                                                                                                                                                                                                                                                      |
+| `MAX_CONCURRENT_TURNS`    | `4`         | Turns running at the same time; the rest wait. A turn still waiting after 30 minutes fails, and the person is told.                                                                                                                                                                                                                         |
+| `MIN_FREE_DISK_GB`        | unset       | Free space, in GB, on the disk Docker keeps volumes on, under which a turn first deletes the home volumes idle longest, and is refused if that isn't enough. Unset: no home is ever deleted.                                                                                                                                                |
+| `HOME_IDLE_HOURS`         | `24`        | How long a home must have gone unused before it can be deleted to make room.                                                                                                                                                                                                                                                                |
+| `HOME_REBUILDABLE`        | unset       | Paths in a home a turn can make again, such as `.local/share/pnpm work/*/node_modules`, cleared from the homes used longest ago before any home is deleted. Unset: homes are only deleted whole.                                                                                                                                            |
+| `TURN_CGROUP_PARENT`      | unset       | A control group (or systemd slice) of yours that every turn's container is started under, so your own limit on it caps them all. The runner doesn't create it or set its limit.                                                                                                                                                             |
+| `TURN_NETWORK`            | `closed`    | `open` gives each turn an ordinary bridge with a direct route out as well as the egress proxy.                                                                                                                                                                                                                                              |
+| `TURN_PORTS`              | unset       | A range of ports on this machine, such as `20000-20029`, that a person can open an agent's app on, with `compose.ports.yaml` ([below](#ports-a-person-can-open)). Unset: nothing outside reaches a turn.                                                                                                                                    |
+| `TURN_PORTS_BIND`         | `127.0.0.1` | The IPv4 address of this machine the range is published on: `127.0.0.1` for this machine only, from Docker Engine 28.0.0 (on an older one, a machine on the same network segment can reach it too), `0.0.0.0` for every IPv4 address this machine has, or one of them. An IPv6 address isn't supported ([below](#ports-a-person-can-open)). |
+| `TURN_PORTS_HOST`         | `localhost` | The name or address people reach this machine by, which an agent gives them with its ports.                                                                                                                                                                                                                                                 |
+| `TURN_PORTS_IDLE_MINUTES` | `30`        | How long an app kept after its turn stays up with nothing connected to it.                                                                                                                                                                                                                                                                  |
+| `DOCKER_SOCKET`           | unset       | Docker's socket on this machine, which the runner is given. Unset: `/var/run/docker.sock`. Set it for a Docker without root (below), with `DOCKER_GID` read as it says there.                                                                                                                                                               |
+| `MACHINE_ADDRESSES`       | unset       | This machine's own addresses, IPv4 and IPv6, separated by commas or spaces, which no turn may reach through the egress proxy, beside those the runner finds. Required on a Docker without root (below). An entry that isn't one address stops every turn, on any Docker.                                                                    |
 
 Turns together can take `TURN_MEMORY_MB` times `MAX_CONCURRENT_TURNS`, 16 GB with the defaults. Nothing caps that total but `TURN_CGROUP_PARENT`.
 
@@ -320,13 +330,22 @@ Turns together can take `TURN_MEMORY_MB` times `MAX_CONCURRENT_TURNS`, 16 GB wit
 
 An agent that builds an app can show it running. With `TURN_PORTS` set to a range of ports and `compose.ports.yaml` laid over the others, each conversation and agent holds three ports from the range while one of its turns is up, and a turn is told them, with the address to give a person, in `CABANE_PORTS` (such as `20000,20001,20002`) and `CABANE_PORTS_HOST`. An app the agent serves on one of them, listening on all of the container's addresses (`0.0.0.0`, not `localhost`), opens at `http://<TURN_PORTS_HOST>:<port>`, WebSockets included.
 
+With `TURN_PORTS` alone, the range is published on `127.0.0.1`, this machine only, and an app opens at `http://localhost:<port>` in a browser here. On a machine other people reach, publish it on the machine's addresses and give the name they reach it by:
+
 ```bash
+echo 'COMPOSE_FILE=compose.yaml:compose.turns.yaml:compose.ports.yaml' >> .env
 echo 'TURN_PORTS=20000-20029' >> .env
+echo 'TURN_PORTS_BIND=0.0.0.0' >> .env
 echo 'TURN_PORTS_HOST=cabane-box.example.com' >> .env
-docker compose -f compose.yaml -f compose.turns.yaml -f compose.ports.yaml up -d
+docker compose up -d
 ```
 
-- **Anyone who can reach this machine on those ports can open the app.** Cabane doesn't check who. For https, names or a sign-in, put a proxy of your own in front, or publish the range on a private address only by editing `compose.ports.yaml`.
+`COMPOSE_FILE` in `.env` names `compose.ports.yaml` with the others, so every `docker compose` command uses it, the upgrade's included: without it there, the next plain `docker compose up -d` publishes nothing and turns fail. If `.env` already has a `COMPOSE_FILE` line, from Turn it on, change that line rather than adding a second. A companion on another machine names `compose.companion.yaml:compose.ports.yaml`.
+
+- **Anyone who can reach the address the range is published on can open the app.** Cabane doesn't check who. `TURN_PORTS_BIND` is that address: `127.0.0.1` unless it's set, `0.0.0.0` for every IPv4 address this machine has, or one of them, such as its address on a private network. It's in `.env`, so an upgrade keeps it. For https, names or a sign-in, leave it unset and put a proxy of your own in front, at `127.0.0.1`.
+- **"This machine only" holds from Docker Engine 28.0.0.** `docker version` shows the Engine's. On an older one, a machine on the same network segment, such as one on the same switch, can still reach a port published on `127.0.0.1`: upgrade Docker, or close the range in this machine's firewall.
+- **The ports are IPv4.** `TURN_PORTS_BIND` takes an IPv4 address; an IPv6 one isn't supported. With `127.0.0.1`, `0.0.0.0` or another IPv4 address, nothing answers on this machine's IPv6 addresses, `::1` included, so `http://[::1]:<port>` gets no answer. `http://localhost:<port>` still opens in a browser, and with `curl`, which try `127.0.0.1` when `::1` doesn't answer. For IPv6, put a proxy of your own in front.
+- **An address this machine doesn't have stops the egress proxy**, and with it every turn. `docker compose up -d` ends with `failed to bind host port <address>:<port>/tcp: cannot assign requested address`, a turn ends saying the device couldn't set up a place to run it, and the runner's log says the egress proxy isn't running. A name isn't an address: Compose refuses it with `invalid IP address`, and starts or changes nothing. Set an address this machine has, or take the line out, and `docker compose up -d` again.
 - **The way in is the egress proxy's.** It publishes the range, and a relay beside Squid passes each connection to the one turn container that owns the port, on the same port. It connects nowhere else, and a connection from a turn's own network is refused, so one turn can't reach another's app through it. Nothing a turn could reach before is reachable now.
 - **An app still serving when its turn ends is kept**, with its container, until nothing has connected to its ports for `TURN_PORTS_IDLE_MINUTES`, the next turn in that conversation starts, someone stops the turn, the egress proxy restarts, or the runner restarts. It keeps its files and its route out, but none of the turn's credentials: no stand-in in it works any more. It doesn't count against `MAX_CONCURRENT_TURNS`, and does count against memory. A container with nothing listening on its ports is removed when its turn ends, as before.
 - **A range serves a third as many conversations and agents up at once as it has ports**, rounded down, however many there are over time: `20000-20029` serves ten at a time. A conversation and agent hold their three while they have a container: a turn running or waiting to start, an app kept after its turn, or a container Docker failed to remove, which the runner tries again each minute and which nothing leads to meanwhile. Their next turn gets the same three when no other conversation has taken them since. When none are free, the ones given are those of the conversation that has been without a container longest.
@@ -340,7 +359,26 @@ Without `TURN_PORTS`, turns' containers and networks are exactly as above. With 
 
 - OpenCode. A turn for OpenCode ends saying it isn't available in a container.
 - The harnesses' own sandboxes. Neither Claude Code's nor Codex's starts under Docker's default settings, so the turn's container is the only isolation.
-- Docker Desktop on a Mac hasn't been tried.
+
+**On Docker Desktop on a Mac.** The instance with `compose.turns.yaml` has been run there, on Apple silicon with 0.6.265: a Claude Code turn answered from a container of its own, and Docker removed that container afterwards, leaving the egress proxy up and the agent's home volume in place. The `stat` line above fails there, since a Mac's `stat` has no `-c`, and the group a Mac shows for the socket isn't the one the runner meets. Read `DOCKER_GID` from inside a container given the socket, in place of that line:
+
+```bash
+export DOCKER_GID=$(docker run --rm -v /var/run/docker.sock:/var/run/docker.sock --entrypoint stat \
+  ghcr.io/cabane-ai/cabane-companion:0.6.274 -c %g /var/run/docker.sock)
+docker compose -f compose.yaml -f compose.turns.yaml up -d
+```
+
+It printed `0` on the Mac it was tried on. Use what it prints on yours, not a fixed `0`.
+
+The runner looks for this machine's addresses from inside Docker's virtual machine there, so it finds that machine's and never the Mac's own. Private addresses (`10.…`, `172.16.…` to `172.31.…`, `192.168.…`, and IPv6 `fd…`), loopback and link-local are refused whatever it finds. Any other address the Mac holds, a public IPv4 or a global IPv6, goes in `MACHINE_ADDRESSES`: one it isn't told, a turn could reach. Turns start either way, and with nothing named the runner's log (`docker compose logs companion`) says so once each time it starts. List the Mac's addresses:
+
+```bash
+ifconfig | grep inet
+```
+
+Copy into `.env` by hand the ones that aren't private, loopback (`127.0.0.1`, `::1`) or link-local (`169.254.…`, `fe80::…`), separated by spaces, as in `MACHINE_ADDRESSES=203.0.113.5 2001:db8::5`. Never write that output into `.env` as it stands: it holds entries with a zone, like `fe80::1%lo0`, and one of those stops every turn. Then run the same `docker compose -f compose.yaml -f compose.turns.yaml up -d` again, with `DOCKER_GID` still set: the runner reads `MACHINE_ADDRESSES` only when it starts.
+
+Not checked on a Mac: a companion on its own (`compose.companion.yaml`, next), ports a person can open (`compose.ports.yaml`), stand-ins, what the egress proxy refuses, and a turn's memory and CPU limits.
 
 **On another machine.** `compose.companion.yaml` brings up a companion and its egress proxy alone, with each turn in a container, paired to an instance elsewhere:
 
@@ -352,15 +390,21 @@ docker compose -f compose.companion.yaml logs companion       # the pairing code
 
 Pair it, sign it in as above and place agents on it as in step 5. It shows up as `cabane-companion`, or `COMPANION_NAME`. The settings above apply to it too, ports with `-f compose.companion.yaml -f compose.ports.yaml`.
 
-**On a Docker without root.** A Docker run without root ([Docker's guide](https://docs.docker.com/engine/security/rootless/)) works with either file, given two settings. Its socket isn't at `/var/run/docker.sock`: put its place in `DOCKER_SOCKET`, usually `$XDG_RUNTIME_DIR/docker.sock`. Read `DOCKER_GID` from inside a container given that socket, which is the group the runner meets there; a `stat` of the socket on this machine gives an id the runner is refused with. With `docker` talking to that Docker:
+**On a Docker without root.** A Docker run without root ([Docker's guide](https://docs.docker.com/engine/security/rootless/)) works with either file, given three settings. Its socket isn't at `/var/run/docker.sock`: put its place in `DOCKER_SOCKET`, usually `$XDG_RUNTIME_DIR/docker.sock`. Read `DOCKER_GID` from inside a container given that socket, which is the group the runner meets there; a `stat` of the socket on this machine gives an id the runner is refused with. With `docker` talking to that Docker:
 
 ```bash
 export DOCKER_SOCKET=$XDG_RUNTIME_DIR/docker.sock
 export DOCKER_GID=$(docker run --rm -v "$DOCKER_SOCKET:/var/run/docker.sock" --entrypoint stat \
-  ghcr.io/cabane-ai/cabane-companion:0.6.265 -c %g /var/run/docker.sock)
+  ghcr.io/cabane-ai/cabane-companion:0.6.274 -c %g /var/run/docker.sock)
 ```
 
-Then bring it up with those two set, without the `stat` line above, which would replace the group with a wrong one, or with nothing where `/var/run/docker.sock` doesn't exist. The instance on this machine with a container per turn:
+Its containers may run in a network of Docker's own, where the runner can't see this machine's addresses, and then a turn could reach whatever this machine serves on its public address. Whether they do depends on how that Docker was set up, so the runner doesn't rely on what it sees. Name them in `MACHINE_ADDRESSES`: every address other machines reach this one by, IPv4 and IPv6. `hostname -I` prints the addresses this machine has, separated by spaces, which is a valid value as it is. If the machine is reached through a public address it doesn't hold itself, one routed to it from elsewhere, add that one too. Without `MACHINE_ADDRESSES` on a Docker without root, no turn starts: the conversation says only that the device couldn't set up a place to run the turn, and the runner's log (`docker compose logs companion`) names `MACHINE_ADDRESSES`. An entry the runner can't read as one address (a range, a port, brackets, a name or a zone like `%eth0`) stops every turn, on any Docker, and the log quotes it: it is never skipped.
+
+```bash
+echo "MACHINE_ADDRESSES=$(hostname -I)" >> .env
+```
+
+Then bring it up with those three set, without the `stat` line above, which would replace the group with a wrong one, or with nothing where `/var/run/docker.sock` doesn't exist. The instance on this machine with a container per turn:
 
 ```bash
 docker compose -f compose.yaml -f compose.turns.yaml up -d
@@ -482,4 +526,5 @@ The install shows up at the collector within a minute: a `cabane.runtime.*` meas
 - **An agent you address never answers** — the runner isn't paired or signed in, or the agent isn't placed on it (step 5). `docker compose logs companion` shows what it's doing. (Check you actually called it: an agent answers a message that names it as `@theagent` in ordinary text. The same handle inside code, a quote or a link calls nobody.)
 - **Login doesn't stick / bounces back to sign-in** — your `PUBLIC_BASE_URL` must match exactly what's in the address bar, scheme included. Over `http://localhost` the session cookie is (correctly) not marked `Secure`; if you changed the port, make sure `PORT` and `PUBLIC_BASE_URL` agree.
 - **A rendered page won't load** — rendered pages are authorized by a short-lived token; reopen the page from the app rather than reusing an old link.
+- **`failed to bind host port` or `invalid IP address` on `docker compose up`, or every turn says the device couldn't set up a place to run it** — with ports on, `TURN_PORTS_BIND` in `.env` may name an address this machine doesn't have, or a name: [Ports a person can open](#ports-a-person-can-open).
 - **Port already in use** — change `PORT` and `PUBLIC_BASE_URL` in `.env` to a free port and `docker compose up` again.

@@ -1,4 +1,4 @@
-# Cabane 0.6.265, released from b992e897c6d7877ec90a363660f1b9a217af6b46. Cabane's images below are this
+# Cabane 0.6.274, released from ec2c07fa834f9313014ae12e786d3a4871509a37. Cabane's images below are this
 # release; `docker compose up -d` here pulls them. To upgrade, put the next
 # release's files over these and run `docker compose pull` and `docker compose up -d`.
 # RUNNER_IMAGE in .env names an image of your own, built on this release's
@@ -47,7 +47,7 @@ services:
       retries: 20
 
   app:
-    image: ghcr.io/cabane-ai/cabane:0.6.265
+    image: ghcr.io/cabane-ai/cabane:0.6.274
     restart: unless-stopped
     mem_limit: ${APP_MEMORY_LIMIT:-0}
     depends_on:
@@ -141,7 +141,7 @@ services:
   # BUILT_IN_RUNNER=0 to leave it out; the instance doesn't need it, and agents
   # can run on companions paired from other machines instead.
   companion:
-    image: ${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.265}
+    image: ${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.274}
     scale: ${BUILT_IN_RUNNER:-1}
     restart: unless-stopped
     # The limit is the whole runner's, every turn in it together (README: What

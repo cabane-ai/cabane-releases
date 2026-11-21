@@ -1,4 +1,4 @@
-# Cabane 0.6.265, released from b992e897c6d7877ec90a363660f1b9a217af6b46. Cabane's images below are this
+# Cabane 0.6.274, released from ec2c07fa834f9313014ae12e786d3a4871509a37. Cabane's images below are this
 # release; `docker compose up -d` here pulls them. To upgrade, put the next
 # release's files over these and run `docker compose pull` and `docker compose up -d`.
 # RUNNER_IMAGE in .env names an image of your own, built on this release's
@@ -19,7 +19,7 @@ name: cabane-companion
 
 services:
   companion:
-    image: ${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.265}
+    image: ${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.274}
     restart: unless-stopped
     mem_limit: ${COMPANION_MEMORY_LIMIT:-0}
     # The device's name in the app.
@@ -30,9 +30,14 @@ services:
       CABANE_BASE_URL: ${CABANE_BASE_URL:?set CABANE_BASE_URL to the instance's https address}
       # Plain http to one host on a private network only, as for the built-in runner.
       CABANE_ALLOW_PLAIN_HTTP_HOST: ${CABANE_ALLOW_PLAIN_HTTP_HOST:-}
+      # This machine's own addresses, which no turn may reach through the egress
+      # proxy, beside those the runner finds itself. Its own variable, never in
+      # CABANE_RUNNER, so the runner checks it exactly as written. README: "On a
+      # Docker without root".
+      MACHINE_ADDRESSES: ${MACHINE_ADDRESSES:-}
       CABANE_RUNNER: >-
         {"executor":"docker","docker":{
-        "image":"${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.265}",
+        "image":"${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.274}",
         "egress":"${COMPOSE_PROJECT_NAME:-cabane-companion}-egress-1",
         "network":"${TURN_NETWORK:-closed}",
         "memoryMb":"${TURN_MEMORY_MB:-4096}",
@@ -41,6 +46,7 @@ services:
         "maxConcurrentTurns":"${MAX_CONCURRENT_TURNS:-4}",
         "minFreeDiskGb":"${MIN_FREE_DISK_GB:-}",
         "homeIdleHours":"${HOME_IDLE_HOURS:-24}",
+        "homeRebuildable":"${HOME_REBUILDABLE:-}",
         "ports":"${TURN_PORTS:-}",
         "portsHost":"${TURN_PORTS_HOST:-}",
         "portsIdleMinutes":"${TURN_PORTS_IDLE_MINUTES:-30}",
@@ -56,7 +62,7 @@ services:
   egress:
     # The companion's own image, which carries the OpenSSL build of Squid and
     # the lookup helper the egress proxy asks (./egress.sh, ./egress.conf).
-    image: ${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.265}
+    image: ${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.274}
     restart: unless-stopped
     mem_limit: ${EGRESS_MEMORY_LIMIT:-0}
     user: proxy
