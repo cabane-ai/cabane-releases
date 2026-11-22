@@ -1,4 +1,4 @@
-# Cabane 0.6.274, released from ec2c07fa834f9313014ae12e786d3a4871509a37. Cabane's images below are this
+# Cabane 0.6.277, released from 6bc0cd5730ea45acb70d4bda590d27b7b8eece03. Cabane's images below are this
 # release; `docker compose up -d` here pulls them. To upgrade, put the next
 # release's files over these and run `docker compose pull` and `docker compose up -d`.
 # RUNNER_IMAGE in .env names an image of your own, built on this release's
@@ -12,9 +12,11 @@
 # and a turn can't reach this machine, Postgres or a private network. To do
 # that it needs Docker's socket, which is control of this machine; the turns'
 # containers never get it. Each turn's network leads only to the egress proxy,
-# a Squid run from the companion's image (./egress.conf), which also keeps
-# secrets with addresses, connections' keys, and the model credentials and
-# GitHub token in secrets.json out of every turn. README:
+# run from the companion's image: the network's gateway to the internet, which
+# refuses this machine and every private address on packets
+# (./egress-gateway.sh), and a Squid (./egress.conf) that keeps secrets with
+# addresses, connections' keys, and the model credentials and GitHub token in
+# secrets.json out of every turn. README:
 # "Each turn in a container of its own".
 #
 # Without this file nothing in the instance changes.
@@ -40,7 +42,7 @@ services:
       # image when that is unset.
       CABANE_RUNNER: >-
         {"executor":"docker","docker":{
-        "image":"${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.274}",
+        "image":"${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.277}",
         "egress":"${COMPOSE_PROJECT_NAME:-cabane}-egress-1",
         "network":"${TURN_NETWORK:-closed}",
         "memoryMb":"${TURN_MEMORY_MB:-4096}",
@@ -63,12 +65,24 @@ services:
     # route helper it asks and the swap service it calls (./egress.sh,
     # ./egress.conf). Always the same image as the companion, which writes the
     # table the swap service reads.
-    image: ${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.274}
+    image: ${RUNNER_IMAGE:-ghcr.io/cabane-ai/cabane-companion:0.6.277}
     restart: unless-stopped
     mem_limit: ${EGRESS_MEMORY_LIMIT:-0}
     user: proxy
     entrypoint: ['/usr/bin/tini', '--', '/usr/local/lib/cabane/egress.sh']
     command: []
+    # The gateway of every turn's network (./egress-gateway.sh): the one
+    # capability it needs, in its own network namespace, held only by the two
+    # commands the companion runs in it as root. Every process it starts is
+    # `proxy` and holds none. Forwarding on, marks counted when a packet's
+    # source is checked, and source-routed packets refused, from the moment
+    # Docker makes its namespace.
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    sysctls:
+      net.ipv4.ip_forward: 1
+      net.ipv4.conf.all.src_valid_mark: 1
+      net.ipv4.conf.all.accept_source_route: 0
     # What the egress proxy keeps only in memory, in a tmpfs: its CA, the
     # certificates it makes, and the table of stand-ins and values. Never on a
     # volume.
